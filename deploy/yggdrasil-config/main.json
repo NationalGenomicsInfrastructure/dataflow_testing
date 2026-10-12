@@ -46,7 +46,7 @@
             "yggdrasil_testdocs": {
                 "endpoint": "couchdb",
                 "resource": {
-                    "db": "yggdrasil"
+                    "db": "yggdrasil_testdocs"
                 },
                 "watch": {
                     "poll_interval": 3,

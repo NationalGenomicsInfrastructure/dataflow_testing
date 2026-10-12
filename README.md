@@ -36,6 +36,8 @@ execution → event/ops artifacts.
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
 │   ├── yggdrasil-config/main.json
 │   ├── seed/test_scenario_happy_path.json
+│   ├── seed/flowcell_status_biomate.json
+│   ├── seed/demux_sample_info_biomate.json
 │   ├── Dockerfile.genomics-status   # builds on top of the submodule's conda-env image
 │   └── genomics-status/             # stub settings/credentials for the full stack
 ├── Makefile                     # submodule management + compose-* targets
@@ -145,6 +147,14 @@ Each injection gets a unique document id, so it always executes; the initial
 on restarts (plans are tracked by `run_token`/`executed_run_token` and
 watcher checkpoints are persisted in CouchDB). Use `make compose-reset` for a
 completely fresh state.
+
+The demux workflow (`dmx_realm`) operates on the BioMate seed documents in
+the `flowcell_status` and `demux_sample_info` databases. Seeding those is
+opt-in (a fresh stack starts with those databases empty):
+
+```bash
+make compose-seed-status   # PUTs both seed docs; idempotent (skips if present)
+```
 
 ### Test recipes
 
@@ -257,6 +267,7 @@ by `compose-up-full`.
 | `make compose-logs` | Follow yggdrasil logs |
 | `make compose-ps` | Stack status |
 | `make compose-scenario` | Inject a fresh test scenario into the running stack |
+| `make compose-seed-status` | Inject the BioMate `flowcell_status` + `demux_sample_info` seeds (opt-in, idempotent) |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 

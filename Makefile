@@ -26,6 +26,7 @@ help: ## Show this help
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
+	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
 	@echo "  update-TARGET  Pull latest for a single submodule"
@@ -296,3 +297,26 @@ compose-scenario: ## Inject a fresh test scenario into a running stack
 		--data-binary @deploy/seed/test_scenario_happy_path.json \
 		"http://localhost:5984/yggdrasil/test_scenario:manual-$$(date +%s)" && \
 		echo "Scenario injected; watch it with: make compose-logs"
+
+# Opt-in seeding of the BioMate workflow documents. Each seed keeps the
+# _id from the file (deterministic, idempotent). _id/_rev are stripped from
+# the PUT body: a _rev in the body makes CouchDB treat the PUT as a
+# revisioned update, which 409s for a new document.
+compose-seed-status: ## Inject the BioMate flowcell_status + demux_sample_info seeds into a running stack
+	@for f in flowcell_status demux_sample_info; do \
+		id=$$(python3 -c "import json; print(json.load(open('deploy/seed/$${f}_biomate.json'))['_id'])"); \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' \
+			-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+			"http://localhost:5984/$${f}/$${id}"); \
+		if [ "$${code}" = "404" ]; then \
+			body=$$(python3 -c "import json, sys; d = json.load(open(sys.argv[1])); d.pop('_id', None); d.pop('_rev', None); print(json.dumps(d))" "deploy/seed/$${f}_biomate.json") && \
+			curl -sf -X PUT \
+				-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+				-H 'Content-Type: application/json' \
+				--data-binary "$${body}" \
+				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
+			echo "Seeded $${f} doc '$${id}'"; \
+		else \
+			echo "$${f} doc '$${id}' already present (HTTP $${code}); skipping"; \
+		fi; \
+	done
