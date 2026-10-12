@@ -219,14 +219,46 @@ update-all: init sync
 # ---------------------------------------------------------------------------
 COMPOSE := docker compose
 
+# Web-service links printed after a successful "up".
+# Argument 1: optional extra link lines (e.g. profile-gated services),
+# each prefixed with $(TAB) so they land on their own recipe line.
+TAB := $(empty) $(empty)
+
+# Credentials: if the user overrides STACK_COUCH_USER/PASSWORD (via
+# environment or `make VAR=...`), print the variable name instead of the
+# value. Empty values fall back to the defaults, matching docker-compose.
+# The name is emitted as '$$VAR' so the shell prints the literal
+# '$VAR'; the value is single-quoted at the printf call site, outside
+# the double quotes, to keep the shell from expanding it.
+ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_USER)),$(STACK_COUCH_USER)))
+	CREDENTIAL_USER = $$STACK_COUCH_USER
+else
+	CREDENTIAL_USER = admin
+endif
+ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_PASSWORD)),$(STACK_COUCH_PASSWORD)))
+	CREDENTIAL_PASSWORD = $$STACK_COUCH_PASSWORD
+else
+	CREDENTIAL_PASSWORD = secret
+endif
+
+define COMPOSE_LINKS
+	@echo ""
+	@echo "Stack is up. Web services:"
+	@printf '  StatusDB (CouchDB Fauxton): http://localhost:5984/_utils/  (login: %s / %s)\n' '$(CREDENTIAL_USER)' '$(CREDENTIAL_PASSWORD)'
+	@echo "  BioMate:                    http://localhost:8765"
+$(1)
+endef
+
 compose-up: ## Build and start statusdb, biomate and yggdrasil
 	$(COMPOSE) up -d --build
+	$(call COMPOSE_LINKS,)
 
 compose-build-gs-base: ## Build the genomics-status base image (conda env)
 	docker build -q -t dataflow-genomics-status-base:latest ./genomics-status
 
 compose-up-full: compose-build-gs-base ## compose-up plus genomics-status (profile "full")
 	$(COMPOSE) --profile full up -d --build
+	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
 
 # Per-service targets (mainly for testing). Compose also starts the
 # depends_on closure of the requested service.
