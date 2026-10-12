@@ -222,3 +222,7 @@ __marimo__/
 
 # opencode session data
 .opencode/
+
+# Temporary directories
+tmp/
+BioMate/temp/
