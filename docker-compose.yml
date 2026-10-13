@@ -107,6 +107,10 @@ services:
       YGG_SCENARIO_ID: ${YGG_SCENARIO_ID:-test_scenario:compose-demo}
       PYTHONUNBUFFERED: "1"
     volumes:
+      # Bind-mount the demux_realm submodule over the copy baked into the
+      # image (editable-installed at /app/demux_realm) so local edits are
+      # picked up on container (re)start without rebuilding the image.
+      - ./demux_realm:/app/demux_realm
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
