@@ -42,7 +42,6 @@ RUN pip install --no-deps -e /app/demux_realm
 # 3) Config, scenario seed and entrypoint. All files ConfigLoader resolves
 #    must live under yggdrasil_workspace/common/configurations/ (CONFIG_DIR).
 COPY deploy/yggdrasil-config/main.json /app/yggdrasil_workspace/common/configurations/main.json
-COPY Yggdrasil/module_registry.json /app/yggdrasil_workspace/common/configurations/module_registry.json
 COPY deploy/seed/test_scenario_happy_path.json /app/scenario_seed.json
 COPY BioMate/temp/20260310_LM43899_0385_A12GGASZR5/ /Illumina/NextSeq/20260310_LM43899_0385_A12GGASZR5/
 COPY BioMate/temp/RunInfo.xml /Illumina/NextSeq/20260310_LM43899_0385_A12GGASZR5/RunInfo.xml
