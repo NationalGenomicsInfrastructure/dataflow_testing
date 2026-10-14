@@ -2,6 +2,7 @@
 #
 #   make compose-up        # statusdb + biomate + yggdrasil
 #   make compose-up-full   # the above + genomics-status (--profile full)
+#   make compose-rebuild   # rebuild all images without cache (recreate containers)
 #   make compose-logs      # follow yggdrasil logs
 #   make compose-reset     # tear everything down, including volumes
 #

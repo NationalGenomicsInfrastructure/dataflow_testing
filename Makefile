@@ -5,11 +5,11 @@ help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
 	@echo "All-submodule targets:"
-	@echo "  init           Initialize and clone all submodules"
+	@echo "  init           Initialize submodules at the commits pinned by this checkout"
 	@echo "  status         Show status of all submodules"
-	@echo "  update-all     Update all submodules to the latest of their current branch"
+	@echo "  update-all     Advance all submodules to their current branch's latest commit"
 	@echo "  sync           Sync submodule remotes with .gitmodules"
-	@echo "  reset          Force all submodules to the commits recorded by the repo"
+	@echo "  reset          Destructively reset submodules to the commits recorded by the repo"
 	@echo "  use-dev        Switch the repo to 'dev' and pin submodules to its commits"
 	@echo "  use-main       Switch the repo to 'main' (or 'master') and pin submodule commits"
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
@@ -29,9 +29,11 @@ help: ## Show this help
 	@echo "  compose-reset             Stop the stack and remove all volumes"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
+	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
+	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
-	@echo "  update-TARGET  Update a single submodule to the latest of its current branch"
+	@echo "  update-TARGET  Advance one submodule to its current branch's latest commit"
 	@echo "  status-TARGET  Show status for a single submodule"
 
 # Clone submodules that are not checked out yet. Already-initialized
@@ -68,9 +70,7 @@ reset:
 	@git submodule status
 
 # Switch the top-level repository to the given branch and check out the
-# submodule commits pinned by that branch. Submodules are never switched
-# to a branch themselves: they are left detached at the pinned commits.
-# Submodules with uncommitted changes are left as-is, with a warning.
+# submodule commits pinned by that branch. Dirty submodules are left as-is.
 # Argument 1: branch name; argument 2: fallback branch name (optional).
 define USE_BRANCH
 @branch="$(1)"; \
@@ -92,15 +92,27 @@ else \
 		exit 1; \
 	fi; \
 fi; \
+failed=0; \
+echo "Checking out the submodule commits pinned by the branch..."; \
 for sub in $(SUBMODULES); do \
 	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-	if [ -n "$$modpath" ] && [ -d "$$modpath" ] && [ -n "$$(git -C "$$modpath" status --porcelain 2>/dev/null)" ]; then \
+	if [ -z "$$modpath" ]; then \
+		echo "WARNING: No .gitmodules entry for '$$sub'"; \
+		failed=1; \
+		continue; \
+	fi; \
+	if [ -d "$$modpath" ] && [ -e "$$modpath/.git" ] && [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
 		echo "WARNING: '$$sub' has uncommitted changes; leaving it at its current commit"; \
+		failed=1; \
+		continue; \
+	fi; \
+	if ! git submodule update --init --recursive -- "$$modpath"; then \
+		echo "WARNING: Could not update '$$sub' to the commit pinned by this branch"; \
+		failed=1; \
 	fi; \
 done; \
-echo "Checking out the submodule commits pinned by the branch..."; \
-git submodule update --init --recursive || echo "WARNING: some submodules were not updated (see messages above)"; \
-git submodule status
+git submodule status || failed=1; \
+exit "$$failed"
 endef
 
 # Switch the repo to the 'dev' branch and pin the submodules to its commits.
@@ -122,10 +134,10 @@ status-%:
 	fi; \
 	git submodule status -- "$$MODPATH"
 
-# Update one submodule to the latest commit of its current local branch
-# (never switches branches). Submodules that are not cloned yet are
-# initialized at their pinned commit; detached submodules only fetch,
-# since there is no branch to pull. Shared by update-all and update-%.
+# Advance one submodule without switching the parent repository branch.
+# Attached submodules follow their configured upstream; detached submodules
+# advance to origin's default branch and remain detached. Shared by update-all
+# and update-%.
 define UPDATE_SUBMODULE
 update_submodule() { \
 	sub="$$1"; \
@@ -136,22 +148,47 @@ update_submodule() { \
 	fi; \
 	if [ ! -e "$$modpath/.git" ]; then \
 		echo "Initializing '$$sub' (not cloned yet)..."; \
-		git submodule update --init --recursive -- "$$modpath" || { echo "WARNING: Could not initialize $$sub"; return 0; }; \
+		git submodule update --init --recursive -- "$$modpath" || { echo "WARNING: Could not initialize $$sub"; return 1; }; \
 		return 0; \
 	fi; \
-	branch=$$(cd "$$modpath" && git rev-parse --abbrev-ref HEAD 2>/dev/null); \
-	if [ "$$branch" = "HEAD" ]; then \
-		sha=$$(cd "$$modpath" && git rev-parse --short HEAD 2>/dev/null); \
-		echo "$$sub is detached at $${sha:-unknown}; fetching remotes only (no branch to update)"; \
-		git -C "$$modpath" fetch --all || echo "WARNING: Could not fetch $$sub"; \
-		return 0; \
+	if [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
+		echo "WARNING: '$$sub' has uncommitted changes; skipping update"; \
+		return 1; \
+	fi; \
+	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
+	if ! git -C "$$modpath" fetch --all; then \
+		echo "WARNING: Could not fetch '$$sub'"; \
+		return 1; \
 	fi; \
 	if [ -z "$$branch" ]; then \
-		echo "WARNING: Could not determine current branch for $$sub, skipping"; \
+		echo "Updating detached '$$sub' to origin's default branch..."; \
+		if ! git -C "$$modpath" remote set-head origin --auto >/dev/null; then \
+			echo "WARNING: Could not resolve origin's default branch for '$$sub'"; \
+			return 1; \
+		fi; \
+		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
+		if [ -z "$$upstream" ]; then \
+			echo "WARNING: origin/HEAD is not available for '$$sub'"; \
+			return 1; \
+		fi; \
+		git -C "$$modpath" checkout --detach "$$upstream" || { echo "WARNING: Could not advance '$$sub' to $$upstream"; return 1; }; \
+		echo "Updated '$$sub' to $$upstream (still detached)"; \
 		return 0; \
 	fi; \
-	echo "Updating '$$sub' (branch: $$branch)..."; \
-	git -C "$$modpath" pull --rebase origin $$branch || echo "WARNING: Could not update $$sub"; \
+	upstream=$$(git -C "$$modpath" rev-parse --abbrev-ref --symbolic-full-name "$$branch@{upstream}" 2>/dev/null) || upstream=""; \
+	if [ -z "$$upstream" ]; then \
+		echo "WARNING: '$$sub' branch '$$branch' has no configured upstream"; \
+		return 1; \
+	fi; \
+	if git -C "$$modpath" merge-base --is-ancestor HEAD "$$upstream"; then \
+		echo "Updating '$$sub' ($$branch) to $$upstream..."; \
+		git -C "$$modpath" merge --ff-only "$$upstream" || { echo "WARNING: Could not fast-forward '$$sub'"; return 1; }; \
+	elif git -C "$$modpath" merge-base --is-ancestor "$$upstream" HEAD; then \
+		echo "'$$sub' is already ahead of $$upstream; leaving it unchanged"; \
+	else \
+		echo "WARNING: '$$sub' branch '$$branch' has diverged from $$upstream; refusing to rewrite local history"; \
+		return 1; \
+	fi; \
 	return 0; \
 };
 endef
@@ -160,7 +197,7 @@ update-%:
 	@$(call UPDATE_SUBMODULE) update_submodule $*
 
 update-all: sync
-	@$(call UPDATE_SUBMODULE) for sub in $(SUBMODULES); do update_submodule "$$sub" || true; done; git submodule status
+	@$(call UPDATE_SUBMODULE) failed=0; for sub in $(SUBMODULES); do update_submodule "$$sub" || failed=1; done; git submodule status || failed=1; exit "$$failed"
 
 # ---------------------------------------------------------------------------
 # Compose testing environment (Yggdrasil workflow)
@@ -284,3 +321,73 @@ compose-seed-status: ## Inject the BioMate flowcell_status + demux_sample_info s
 			echo "$${f} doc '$${id}' already present (HTTP $${code}); skipping"; \
 		fi; \
 	done
+
+# Knobs for compose-trigger / compose-inject (see below).
+DBS ?= flowcell_status demux_sample_info
+COUNT ?= 1
+LANES ?=
+DIR ?=
+
+# Re-touch the seeded BioMate docs so the watcher re-fires the demux
+# workflow. The mutation is repeatable: a timestamp is rewritten to the
+# current time on every run, so each invocation lands a fresh revision
+# (flowcell_status: last event; demux_sample_info: first_generated).
+# DBS= selects which docs to touch.
+compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=)
+	@for f in $(DBS); do \
+		id=$$(python3 -c "import json; print(json.load(open('deploy/seed/$${f}_biomate.json'))['_id'])"); \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' \
+			-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+			"http://localhost:5984/$${f}/$${id}"); \
+		if [ "$${code}" = "404" ]; then \
+			echo "error: $${f} doc '$${id}' not found (HTTP 404) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+		elif [ "$${f}" = "demux_sample_info" ]; then \
+			now=$$(date -u +%Y-%m-%dT%H:%M:%S.000+00:00); \
+			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
+				python3 -c "import json, sys; d = json.load(sys.stdin); d['metadata']['first_generated'] = sys.argv[1]; print(json.dumps(d))" "$${now}") && \
+			curl -sf -X PUT \
+				-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+				-H 'Content-Type: application/json' \
+				--data-binary "$${body}" \
+				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
+			echo "Touched $${f} doc '$${id}' (first_generated -> $${now})"; \
+		else \
+			now=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
+				python3 -c "import json, sys; d = json.load(sys.stdin); d['events'][-1]['timestamp'] = sys.argv[1]; print(json.dumps(d))" "$${now}") && \
+			curl -sf -X PUT \
+				-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+				-H 'Content-Type: application/json' \
+				--data-binary "$${body}" \
+				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
+			echo "Touched $${f} doc '$${id}' (last event -> $${now})"; \
+		fi; \
+	done
+	@echo "Watch the workflow with: make compose-logs"
+
+# Inject fresh flowcell documents into a running stack. The templates are
+# the LIVE docs in the database (fetched by _id from the seed files) and
+# the output is generated on the fly by deploy/seed/generate_flowcell.py:
+#   random mode (default): COUNT new flowcells with fresh
+#     flowcell/runfolder ids, remapped projects/samples and event
+#     timestamps rebased to now;
+#   DIR mode: builds the docs from the SampleSheet.csv of a real run
+#     folder (e.g. DIR=BioMate/temp), upserted by flowcell_id, so
+#     re-injecting the same run folder replaces the existing docs.
+#   COUNT= number of flowcells (random mode, default 1)
+#   LANES= lane count (default: the template's)
+#   DIR=   run folder to build the docs from (implies COUNT=1)
+compose-inject: ## Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)
+	@f_id=$$(python3 -c "import json; print(json.load(open('deploy/seed/flowcell_status_biomate.json'))['_id'])"); \
+	d_id=$$(python3 -c "import json; print(json.load(open('deploy/seed/demux_sample_info_biomate.json'))['_id'])"); \
+	extra=""; \
+	if [ -n "$(LANES)" ]; then extra="$$extra --lanes $(LANES)"; fi; \
+	if [ -n "$(DIR)" ]; then extra="$$extra --dir $(DIR)"; fi; \
+	python3 deploy/seed/generate_flowcell.py \
+		--base-url http://localhost:5984 \
+		--user "$${STACK_COUCH_USER:-admin}" \
+		--password "$${STACK_COUCH_PASSWORD:-secret}" \
+		--count $(COUNT) \
+		--template-flowcell-id "$${f_id}" \
+		--template-demux-id "$${d_id}" \
+		$$extra
