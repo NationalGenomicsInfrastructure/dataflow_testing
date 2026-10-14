@@ -1,9 +1,9 @@
 [submodule "BioMate"]
 	path = BioMate
-	url = git@github.com:fagostini/BioMate.git
+	url = git@github.com:NationalGenomicsInfrastructure/BioMate.git
 [submodule "genomics-status"]
 	path = genomics-status
-	url = git@github.com:fagostini/genomics-status.git
+	url = git@github.com:NationalGenomicsInfrastructure/genomics-status.git
 [submodule "StatusDB_NGI"]
 	path = StatusDB_NGI
 	url = git@github.com:NationalGenomicsInfrastructure/StatusDB_NGI.git

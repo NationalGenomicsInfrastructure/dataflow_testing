@@ -230,7 +230,8 @@ targets:
 
 | Target | Purpose |
 |--------|---------|
-| `make init` | Clone/update all submodules |
+| `make init` / `make init-<TARGET>` | Register missing submodules, sync URLs, and initialize root module(s) at parent-pinned commits; clone missing genomics-status/nvd3 |
+| `make deinit CONFIRM=1` / `make deinit-<TARGET> CONFIRM=1` | Remove all/one submodule checkout and local Git database |
 | `make status` / `make status-<TARGET>` | Show submodule state |
 | `make update-<TARGET>` / `make update-all` | Pull latest for one/all submodules |
 | `make use-dev` / `make use-dev-<TARGET>` | Switch to `dev` branches |
@@ -238,6 +239,17 @@ targets:
 | `make sync` | Sync submodule remotes with `.gitmodules` |
 | `make reset` | Reset submodules to their recorded commits |
 | `make extract-deps` | Print a `pixi add ...` one-liner from the submodules' `pyproject.toml` files |
+
+Deinitialization is destructive: it removes the submodule worktree (including
+ignored files) and its local Git database under `.git/modules/`, including
+local-only commits and refs. It refuses tracked or untracked changes and
+requires `CONFIRM=1`; `.gitmodules` registrations are retained so the `init`
+targets can restore them. Initialization only adds missing registrations and
+does not overwrite existing URLs. A newly added submodule gitlink or repaired
+`.gitmodules` entry may leave parent-repository changes to review and commit.
+Initialization does not update submodules recursively. The nested
+`genomics-status/run_dir/static/nvd3` checkout is initialized only when absent;
+once cloned, later `make init` runs leave its commit unchanged.
 
 After updating submodules, `make compose-up` rebuilds the images from the new
 code. For genomics-status, the base (conda env) image is rebuilt automatically
