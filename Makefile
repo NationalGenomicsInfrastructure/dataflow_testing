@@ -5,13 +5,13 @@ help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
 	@echo "All-submodule targets:"
-	@echo "  init           Initialize and clone all submodules"
+	@echo "  init           Initialize submodules at the commits pinned by this checkout"
 	@echo "  status         Show status of all submodules"
-	@echo "  update-all     Pull latest from remote for all submodules"
-	@echo "  sync           Sync submodules with .gitmodules remotes"
-	@echo "  reset          Reset all submodules to their recorded commits"
-	@echo "  use-dev        Switch all submodules to their 'dev' branches"
-	@echo "  use-main       Switch all submodules to their 'main' branches"
+	@echo "  update-all     Advance all submodules to their current branch's latest commit"
+	@echo "  sync           Sync submodule remotes with .gitmodules"
+	@echo "  reset          Destructively reset submodules to the commits recorded by the repo"
+	@echo "  use-dev        Switch the repo to 'dev' and pin submodules to its commits"
+	@echo "  use-main       Switch the repo to 'main' (or 'master') and pin submodule commits"
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
 	@echo ""
 	@echo "Compose targets (Yggdrasil workflow testing environment):"
@@ -21,23 +21,30 @@ help: ## Show this help
 	@echo "  compose-up-biomate        Build and start only biomate"
 	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its deps)"
 	@echo "  compose-up-genomics-status  Build and start genomics-status (profile full)"
+	@echo "  compose-rebuild           Rebuild all images without cache and recreate the stack"
+	@echo "  compose-rebuild-full      Same, plus genomics-status (profile full)"
 	@echo "  compose-down              Stop and remove the stack (volumes are kept)"
 	@echo "  compose-logs              Follow yggdrasil logs"
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
+	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
+	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
-	@echo "  update-TARGET  Pull latest for a single submodule"
+	@echo "  update-TARGET  Advance one submodule to its current branch's latest commit"
 	@echo "  status-TARGET  Show status for a single submodule"
-	@echo "  sync-TARGET    Sync a single submodule's remote"
-	@echo "  reset-TARGET   Reset a single submodule to recorded commit"
-	@echo "  use-dev-TARGET Switch a single submodule to its 'dev' branch"
-	@echo "  use-main-TARGET Switch a single submodule to its 'main' branch"
 
+# Clone submodules that are not checked out yet. Already-initialized
+# submodules are left exactly as-is (no branch switching, no reset):
+# `status` prefixes uninitialized submodules with '-'.
 init:
-	git submodule status --init > /dev/null 2>&1 || git submodule update --init --recursive
+	@for path in $$(git submodule status | awk '$$1 ~ /^-/ {print $$2}'); do \
+		echo "Initializing submodule '$$path'..."; \
+		git submodule update --init --recursive -- "$$path"; \
+	done
+	@git submodule status
 
 extract-deps:
 	@DEPS=$$(python3 $(CURDIR)/extract_deps.py 2>&1); \
@@ -55,130 +62,67 @@ status:
 sync:
 	@git submodule sync
 
+# Force every submodule back to the commit recorded by the top-level repo,
+# discarding uncommitted changes and untracked files along the way.
 reset:
-	@git submodule foreach 'git reset --hard @{u} && git clean -fd 2>/dev/null'
+	@git submodule foreach --recursive 'git clean -fd'
+	@git submodule update --init --force --recursive
+	@git submodule status
 
-# Switch single submodule to dev
-use-dev-%:
-	@MODULE="$*"; \
-	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
-	if [ -z "$$MODPATH" ]; then \
-		echo "Error: No submodule named '$$MODULE' found"; \
-		exit 1; \
-	fi; \
-	IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
-	if [ "$$IS_CLEAN" -gt 0 ]; then \
-		echo "WARNING: $$MODULE has uncommitted changes, skipping"; \
-		exit 1; \
-	fi; \
-	echo "Pulling latest for '$$MODULE' before checkout..."; \
-	git -C "$$MODPATH" fetch --all 2>/dev/null; \
-	echo "Switching '$$MODULE' to dev..."; \
-	(cd $$MODPATH && git checkout dev 2>/dev/null) || \
-		(IS_LOCAL=$$(cd $$MODPATH && git branch | grep -c 'dev' 2>/dev/null) && \
-		if [ "$$IS_LOCAL" -gt 0 ]; then \
-			(cd $$MODPATH && git checkout dev || git checkout -b dev --track origin/dev 2>/dev/null); \
-		else \
-			echo "WARNING: Dev branch 'dev' not found in '$$MODULE'"; \
-			exit 1; \
-		fi); \
-	echo "Pulling latest..."; \
-	git -C "$$MODPATH" pull --rebase; \
-	git submodule update --recursive
-
-# Switch single submodule to main (or master as fallback)
-use-main-%:
-	@MODULE="$*"; \
-	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
-	if [ -z "$$MODPATH" ]; then \
-		echo "Error: No submodule named '$$MODULE' found"; \
-		exit 1; \
-	fi; \
-	IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
-	if [ "$$IS_CLEAN" -gt 0 ]; then \
-		echo "WARNING: $$MODULE has uncommitted changes, skipping"; \
-		exit 1; \
-	fi; \
-	BRANCH=$$(cd $$MODPATH && git branch -r --list 'origin/main' 2>/dev/null || true); \
-	if echo "$$BRANCH" | grep -q 'main'; then \
-		TARGET="main"; \
+# Switch the top-level repository to the given branch and check out the
+# submodule commits pinned by that branch. Dirty submodules are left as-is.
+# Argument 1: branch name; argument 2: fallback branch name (optional).
+define USE_BRANCH
+@branch="$(1)"; \
+if git rev-parse --verify --quiet refs/heads/$$branch >/dev/null; then \
+	git checkout "$$branch" || exit 1; \
+elif git rev-parse --verify --quiet refs/remotes/origin/$$branch >/dev/null; then \
+	echo "No local branch '$$branch'; creating it from origin/$$branch"; \
+	git checkout -b "$$branch" "origin/$$branch" || exit 1; \
+else \
+	fallback="$(2)"; \
+	if [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/heads/$$fallback >/dev/null; then \
+		echo "No branch '$(1)' found; using '$(2)' instead"; \
+		git checkout "$$fallback" || exit 1; \
+	elif [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/remotes/origin/$$fallback >/dev/null; then \
+		echo "No branch '$(1)' found; creating '$(2)' from origin/$$fallback"; \
+		git checkout -b "$$fallback" "origin/$$fallback" || exit 1; \
 	else \
-		TARGET="master"; \
-		echo "No 'main' branch found for '$$MODULE', using 'master'"; \
+		echo "Error: branch '$(1)' not found (locally or on origin)"; \
+		exit 1; \
 	fi; \
-	echo "Pulling latest for '$$MODULE' before checkout..."; \
-	git -C "$$MODPATH" fetch --all 2>/dev/null; \
-	echo "Switching '$$MODULE' to $$TARGET..."; \
-	(cd $$MODPATH && git checkout $$TARGET 2>/dev/null) || \
-		(IS_LOCAL=$$(cd $$MODPATH && git branch | grep -c "$$TARGET" 2>/dev/null) && \
-		if [ "$$IS_LOCAL" -gt 0 ]; then \
-			(cd $$MODPATH && git checkout $$TARGET || git checkout -b $$TARGET --track origin/$$TARGET 2>/dev/null); \
-		else \
-			echo "WARNING: Branch '$$TARGET' not found in '$$MODULE'"; \
-			exit 1; \
-		fi); \
-	echo "Pulling latest..."; \
-	git -C "$$MODPATH" pull --rebase; \
-	git submodule update --recursive
+fi; \
+failed=0; \
+echo "Checking out the submodule commits pinned by the branch..."; \
+for sub in $(SUBMODULES); do \
+	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
+	if [ -z "$$modpath" ]; then \
+		echo "WARNING: No .gitmodules entry for '$$sub'"; \
+		failed=1; \
+		continue; \
+	fi; \
+	if [ -d "$$modpath" ] && [ -e "$$modpath/.git" ] && [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
+		echo "WARNING: '$$sub' has uncommitted changes; leaving it at its current commit"; \
+		failed=1; \
+		continue; \
+	fi; \
+	if ! git submodule update --init --recursive -- "$$modpath"; then \
+		echo "WARNING: Could not update '$$sub' to the commit pinned by this branch"; \
+		failed=1; \
+	fi; \
+done; \
+git submodule status || failed=1; \
+exit "$$failed"
+endef
 
-# Switch all submodules to dev
+# Switch the repo to the 'dev' branch and pin the submodules to its commits.
 use-dev:
-	@for sub in $(SUBMODULES); do \
-		MODPATH=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-		IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
-		if [ "$$IS_CLEAN" -gt 0 ]; then \
-			echo "WARNING: $$sub has uncommitted changes, skipping"; \
-			continue; \
-		fi; \
-		echo "Pulling latest for '$$sub' before checkout..."; \
-		git -C "$$MODPATH" fetch --all 2>/dev/null; \
-		echo "Switching '$$sub' to dev..."; \
-		(cd "$$MODPATH" && git checkout dev 2>/dev/null) || \
-		(IS_LOCAL=$$(cd "$$MODPATH" && git branch | grep -c 'dev' 2>/dev/null) && \
-			if [ "$$IS_LOCAL" -gt 0 ]; then \
-				(cd "$$MODPATH" && git checkout dev || git checkout -b dev --track origin/dev 2>/dev/null); \
-			else \
-				echo "WARNING: Dev branch 'dev' not found in '$$sub'"; \
-				continue; \
-			fi); \
-		echo "Pulling latest for '$$sub'..."; \
-		git -C "$$MODPATH" pull --rebase; \
-	done
-	@echo "Syncing parent repo with updated submodule references"
-	@git submodule sync
+	$(call USE_BRANCH,dev,)
 
-# Switch all submodules to main (or master as fallback)
+# Switch the repo to the 'main' branch ('master' as fallback) and pin the
+# submodules to its commits.
 use-main:
-	@for sub in $(SUBMODULES); do \
-		MODPATH=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-		IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
-		if [ "$$IS_CLEAN" -gt 0 ]; then \
-			echo "WARNING: $$sub has uncommitted changes, skipping"; \
-			continue; \
-		fi; \
-		echo "Pulling latest for '$$sub' before checkout..."; \
-		git -C "$$MODPATH" fetch --all 2>/dev/null; \
-		BRANCH=$$(cd "$$MODPATH" && git branch -r --list 'origin/main' 2>/dev/null || true); \
-		if echo "$$BRANCH" | grep -q 'main'; then \
-			TARGET="main"; \
-		else \
-			TARGET="master"; \
-			echo "No 'main' branch found for '$$sub', using 'master'"; \
-		fi; \
-		echo "Switching '$$sub' to $$TARGET..."; \
-		(cd "$$MODPATH" && git checkout $$TARGET 2>/dev/null) || \
-		(IS_LOCAL=$$(cd "$$MODPATH" && git branch | grep -c "$$TARGET" 2>/dev/null) && \
-			if [ "$$IS_LOCAL" -gt 0 ]; then \
-				(cd "$$MODPATH" && git checkout $$TARGET || git checkout -b $$TARGET --track origin/$$TARGET 2>/dev/null); \
-			else \
-				echo "WARNING: Branch '$$TARGET' not found in '$$sub'"; \
-				continue; \
-			fi); \
-		echo "Pulling latest for '$$sub'..."; \
-		git -C "$$MODPATH" pull --rebase; \
-	done
-	@echo "Syncing parent repo with updated submodule references"
-	@git submodule sync
+	$(call USE_BRANCH,main,master)
 
 # Per-submodule status
 status-%:
@@ -190,30 +134,70 @@ status-%:
 	fi; \
 	git submodule status -- "$$MODPATH"
 
-update-%:
-	@MODULE="$*"; \
-	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
-	if [ -z "$$MODPATH" ]; then \
-		echo "Error: No submodule named '$$MODULE' found"; \
-		exit 1; \
+# Advance one submodule without switching the parent repository branch.
+# Attached submodules follow their configured upstream; detached submodules
+# advance to origin's default branch and remain detached. Shared by update-all
+# and update-%.
+define UPDATE_SUBMODULE
+update_submodule() { \
+	sub="$$1"; \
+	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
+	if [ -z "$$modpath" ]; then \
+		echo "WARNING: No .gitmodules entry for '$$sub'"; \
+		return 1; \
 	fi; \
-	echo "Pulling latest for '$$MODULE' (branch: $$(cd $$MODPATH && git rev-parse --abbrev-ref HEAD))"; \
-	git -C "$$MODPATH" pull --rebase; \
-	git submodule update --recursive
-
-update-all: init sync
-	@for sub in $(SUBMODULES); do \
-		MODPATH=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-		if [ -n "$$MODPATH" ]; then \
-			BRANCH=$$(cd "$$MODPATH" && git rev-parse --abbrev-ref HEAD 2>/dev/null) || continue; \
-			echo "Pulling latest for '$$sub' (branch: $$BRANCH)"; \
-			git -C "$$MODPATH" pull --rebase origin $$BRANCH || echo "WARNING: Could not update $$sub"; \
-		else \
-			echo "WARNING: No .gitmodules entry for $$sub"; \
+	if [ ! -e "$$modpath/.git" ]; then \
+		echo "Initializing '$$sub' (not cloned yet)..."; \
+		git submodule update --init --recursive -- "$$modpath" || { echo "WARNING: Could not initialize $$sub"; return 1; }; \
+		return 0; \
+	fi; \
+	if [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
+		echo "WARNING: '$$sub' has uncommitted changes; skipping update"; \
+		return 1; \
+	fi; \
+	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
+	if ! git -C "$$modpath" fetch --all; then \
+		echo "WARNING: Could not fetch '$$sub'"; \
+		return 1; \
+	fi; \
+	if [ -z "$$branch" ]; then \
+		echo "Updating detached '$$sub' to origin's default branch..."; \
+		if ! git -C "$$modpath" remote set-head origin --auto >/dev/null; then \
+			echo "WARNING: Could not resolve origin's default branch for '$$sub'"; \
+			return 1; \
 		fi; \
-	done
-	@echo "Syncing parent repo with updated submodule references"
-	@cd "$(shell dirname $(lastword $(MAKEFILE_LIST)))" && git submodule sync
+		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
+		if [ -z "$$upstream" ]; then \
+			echo "WARNING: origin/HEAD is not available for '$$sub'"; \
+			return 1; \
+		fi; \
+		git -C "$$modpath" checkout --detach "$$upstream" || { echo "WARNING: Could not advance '$$sub' to $$upstream"; return 1; }; \
+		echo "Updated '$$sub' to $$upstream (still detached)"; \
+		return 0; \
+	fi; \
+	upstream=$$(git -C "$$modpath" rev-parse --abbrev-ref --symbolic-full-name "$$branch@{upstream}" 2>/dev/null) || upstream=""; \
+	if [ -z "$$upstream" ]; then \
+		echo "WARNING: '$$sub' branch '$$branch' has no configured upstream"; \
+		return 1; \
+	fi; \
+	if git -C "$$modpath" merge-base --is-ancestor HEAD "$$upstream"; then \
+		echo "Updating '$$sub' ($$branch) to $$upstream..."; \
+		git -C "$$modpath" merge --ff-only "$$upstream" || { echo "WARNING: Could not fast-forward '$$sub'"; return 1; }; \
+	elif git -C "$$modpath" merge-base --is-ancestor "$$upstream" HEAD; then \
+		echo "'$$sub' is already ahead of $$upstream; leaving it unchanged"; \
+	else \
+		echo "WARNING: '$$sub' branch '$$branch' has diverged from $$upstream; refusing to rewrite local history"; \
+		return 1; \
+	fi; \
+	return 0; \
+};
+endef
+
+update-%:
+	@$(call UPDATE_SUBMODULE) update_submodule $*
+
+update-all: sync
+	@$(call UPDATE_SUBMODULE) failed=0; for sub in $(SUBMODULES); do update_submodule "$$sub" || failed=1; done; git submodule status || failed=1; exit "$$failed"
 
 # ---------------------------------------------------------------------------
 # Compose testing environment (Yggdrasil workflow)
@@ -275,6 +259,23 @@ compose-up-yggdrasil: ## Build and start yggdrasil (plus its deps: statusdb, bio
 compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "full"; plus statusdb)
 	$(COMPOSE) --profile full up -d --build genomics-status
 
+# Rebuild images without any cache, then recreate the containers on the
+# fresh images. --force-recreate makes the recreation explicit even if a
+# rebuild happened to produce the same image ID.
+compose-rebuild: ## Rebuild all images without cache and recreate the stack
+	$(COMPOSE) build --no-cache
+	$(COMPOSE) up -d --force-recreate
+	$(call COMPOSE_LINKS,)
+
+# The genomics-status app image builds on a base image that compose never
+# rebuilds itself, so the base is no-cache-rebuilt inline first (same build
+# as compose-build-gs-base, plus --no-cache).
+compose-rebuild-full: ## No-cache rebuild, plus genomics-status (profile "full")
+	docker build -q --no-cache -t dataflow-genomics-status-base:latest ./genomics-status
+	$(COMPOSE) --profile full build --no-cache
+	$(COMPOSE) --profile full up -d --force-recreate
+	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
+
 # Teardown always passes --profile full so profile-gated services
 # (genomics-status) are covered no matter how the stack was started;
 # down only acts on containers that exist.
@@ -320,3 +321,73 @@ compose-seed-status: ## Inject the BioMate flowcell_status + demux_sample_info s
 			echo "$${f} doc '$${id}' already present (HTTP $${code}); skipping"; \
 		fi; \
 	done
+
+# Knobs for compose-trigger / compose-inject (see below).
+DBS ?= flowcell_status demux_sample_info
+COUNT ?= 1
+LANES ?=
+DIR ?=
+
+# Re-touch the seeded BioMate docs so the watcher re-fires the demux
+# workflow. The mutation is repeatable: a timestamp is rewritten to the
+# current time on every run, so each invocation lands a fresh revision
+# (flowcell_status: last event; demux_sample_info: first_generated).
+# DBS= selects which docs to touch.
+compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=)
+	@for f in $(DBS); do \
+		id=$$(python3 -c "import json; print(json.load(open('deploy/seed/$${f}_biomate.json'))['_id'])"); \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' \
+			-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+			"http://localhost:5984/$${f}/$${id}"); \
+		if [ "$${code}" = "404" ]; then \
+			echo "error: $${f} doc '$${id}' not found (HTTP 404) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+		elif [ "$${f}" = "demux_sample_info" ]; then \
+			now=$$(date -u +%Y-%m-%dT%H:%M:%S.000+00:00); \
+			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
+				python3 -c "import json, sys; d = json.load(sys.stdin); d['metadata']['first_generated'] = sys.argv[1]; print(json.dumps(d))" "$${now}") && \
+			curl -sf -X PUT \
+				-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+				-H 'Content-Type: application/json' \
+				--data-binary "$${body}" \
+				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
+			echo "Touched $${f} doc '$${id}' (first_generated -> $${now})"; \
+		else \
+			now=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
+				python3 -c "import json, sys; d = json.load(sys.stdin); d['events'][-1]['timestamp'] = sys.argv[1]; print(json.dumps(d))" "$${now}") && \
+			curl -sf -X PUT \
+				-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+				-H 'Content-Type: application/json' \
+				--data-binary "$${body}" \
+				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
+			echo "Touched $${f} doc '$${id}' (last event -> $${now})"; \
+		fi; \
+	done
+	@echo "Watch the workflow with: make compose-logs"
+
+# Inject fresh flowcell documents into a running stack. The templates are
+# the LIVE docs in the database (fetched by _id from the seed files) and
+# the output is generated on the fly by deploy/seed/generate_flowcell.py:
+#   random mode (default): COUNT new flowcells with fresh
+#     flowcell/runfolder ids, remapped projects/samples and event
+#     timestamps rebased to now;
+#   DIR mode: builds the docs from the SampleSheet.csv of a real run
+#     folder (e.g. DIR=BioMate/temp), upserted by flowcell_id, so
+#     re-injecting the same run folder replaces the existing docs.
+#   COUNT= number of flowcells (random mode, default 1)
+#   LANES= lane count (default: the template's)
+#   DIR=   run folder to build the docs from (implies COUNT=1)
+compose-inject: ## Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)
+	@f_id=$$(python3 -c "import json; print(json.load(open('deploy/seed/flowcell_status_biomate.json'))['_id'])"); \
+	d_id=$$(python3 -c "import json; print(json.load(open('deploy/seed/demux_sample_info_biomate.json'))['_id'])"); \
+	extra=""; \
+	if [ -n "$(LANES)" ]; then extra="$$extra --lanes $(LANES)"; fi; \
+	if [ -n "$(DIR)" ]; then extra="$$extra --dir $(DIR)"; fi; \
+	python3 deploy/seed/generate_flowcell.py \
+		--base-url http://localhost:5984 \
+		--user "$${STACK_COUCH_USER:-admin}" \
+		--password "$${STACK_COUCH_PASSWORD:-secret}" \
+		--count $(COUNT) \
+		--template-flowcell-id "$${f_id}" \
+		--template-demux-id "$${d_id}" \
+		$$extra
