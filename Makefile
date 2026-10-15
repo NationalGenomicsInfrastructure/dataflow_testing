@@ -268,8 +268,9 @@ compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "f
 YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
 
 compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sidecar
-	$(COMPOSE) up -d --build
+	$(COMPOSE) build yggdrasil
 	docker build -q -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
+	$(COMPOSE) up -d --build statusdb biomate
 	YGG_IMAGE=$(YGG_DIND_IMAGE) $(COMPOSE) up -d yggdrasil
 	$(COMPOSE) --profile dind up -d --wait dind
 	$(call COMPOSE_LINKS,)
@@ -280,6 +281,8 @@ compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sideca
 compose-demux-test: ## Run nf-core/demultiplex on the tiny test run (needs compose-up-dind)
 	$(COMPOSE) --profile dind up -d --wait dind
 	$(COMPOSE) exec -T yggdrasil wait-for-dind
+	# TODO: sheet format for samshee still WIP (samshee v2 wants a [Data]
+	# section in addition to [BCLConvert_Data]; the sed below only renames)
 	$(COMPOSE) exec -T yggdrasil sh -c 'sed "s/\[BCLConvert_Data\]/[Data]/" /data/test_run/SampleSheet.csv > /work/SampleSheet_nfdemux.csv'
 	$(COMPOSE) exec -T yggdrasil nextflow run nf-core/demultiplex --flowcell_id 20260310_LM43899_0385_A12GGASZR5 --flowcell_samplesheet /work/SampleSheet_nfdemux.csv --flowcell_path /data/test_run -profile docker -work-dir /work/nf-work --outdir /work/nf-results -resume
 
