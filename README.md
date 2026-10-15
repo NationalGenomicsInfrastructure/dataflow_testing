@@ -69,7 +69,7 @@ several-minute build. Subsequent builds are fast (layer caching).
 ## Quickstart
 
 ```bash
-git clone git@github.com:fagostini/dataflow_testing.git
+git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
 make compose-up      # build + start statusdb, biomate, yggdrasil
@@ -260,7 +260,8 @@ targets:
 
 | Target | Purpose |
 |--------|---------|
-| `make init` | Initialize submodules at the exact commits pinned by the current parent checkout |
+| `make init` / `make init-<TARGET>` | Register missing submodules, sync URLs, and initialize root module(s) at parent-pinned commits; clone missing genomics-status/nvd3 |
+| `make deinit CONFIRM=1` / `make deinit-<TARGET> CONFIRM=1` | Remove all/one submodule checkout and local Git database |
 | `make status` / `make status-<TARGET>` | Show submodule state |
 | `make update-<TARGET>` / `make update-all` | Advance submodules without switching the parent branch |
 | `make use-dev` | Switch the parent repo to `dev` and apply its pinned submodule commits |
@@ -269,15 +270,16 @@ targets:
 | `make reset` | Destructively clean and reset submodules to their recorded commits |
 | `make extract-deps` | Print a `pixi add ...` one-liner from the submodules' `pyproject.toml` files |
 
-`make init` and `make use-main`/`make use-dev` use the exact submodule commits
-recorded by the current parent checkout; submodules will typically be detached
-at those commits. The `update-*` targets behave differently: an attached
-submodule advances to its configured upstream using a fast-forward only, while
-a detached submodule advances to `origin`'s default branch and remains
-detached. Dirty worktrees, missing upstream/default refs, and divergent
-histories are reported and skipped. Successful updates change the parent
-repository's submodule gitlink; stage that path explicitly if you intend to
-record the new pin.
+Deinitialization is destructive: it removes the submodule worktree (including
+ignored files) and its local Git database under `.git/modules/`, including
+local-only commits and refs. It refuses tracked or untracked changes and
+requires `CONFIRM=1`; `.gitmodules` registrations are retained so the `init`
+targets can restore them. Initialization only adds missing registrations and
+does not overwrite existing URLs. A newly added submodule gitlink or repaired
+`.gitmodules` entry may leave parent-repository changes to review and commit.
+Initialization does not update submodules recursively. The nested
+`genomics-status/run_dir/static/nvd3` checkout is initialized only when absent;
+once cloned, later `make init` runs leave its commit unchanged.
 
 After updating submodules, `make compose-up` rebuilds the images from the new
 code. For genomics-status, the base (conda env) image is rebuilt automatically
@@ -344,5 +346,5 @@ by `compose-up-full`.
 | `StatusDB_NGI` | [NationalGenomicsInfrastructure/StatusDB_NGI](https://github.com/NationalGenomicsInfrastructure/StatusDB_NGI) | CouchDB image + seed data (`statusdb`) |
 | `Yggdrasil` | [NationalGenomicsInfrastructure/Yggdrasil](https://github.com/NationalGenomicsInfrastructure/Yggdrasil) | The orchestration daemon under test |
 | `demux_realm` | [NationalGenomicsInfrastructure/demux_realm](https://github.com/NationalGenomicsInfrastructure/demux_realm) | Yggdrasil realm for demux planning; installed into the Yggdrasil image as realm `dmx_realm` (`--no-deps`), watches the `demux_sample_info` + `flowcell_status` DBs (bootstrapped by the yggdrasil entrypoint). **Requires the Yggdrasil `dev` branch** (handler API `generate_plan_drafts`) |
-| `BioMate` | [fagostini/BioMate](https://github.com/fagostini/BioMate) | Bio-data tooling + web interface (`biomate`) |
-| `genomics-status` | [fagostini/genomics-status](https://github.com/fagostini/genomics-status) | Status dashboard UI (`genomics-status`, profile `full`) |
+| `BioMate` | [NationalGenomicsInfrastructure/BioMate](https://github.com/NationalGenomicsInfrastructure/BioMate) | Bio-data tooling + web interface (`biomate`) |
+| `genomics-status` | [NationalGenomicsInfrastructure/genomics-status](https://github.com/NationalGenomicsInfrastructure/genomics-status) | Status dashboard UI (`genomics-status`, profile `full`) |
