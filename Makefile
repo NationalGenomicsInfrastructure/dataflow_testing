@@ -5,7 +5,9 @@ help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
 	@echo "All-submodule targets:"
-	@echo "  init           Initialize submodules at the commits pinned by this checkout"
+	@echo "  init           Register and initialize root modules; clone missing genomics-status/nvd3"
+	@echo "  deinit         Remove all submodule worktrees and Git data (CONFIRM=1 required)"
+	@echo "  deinit-all     Alias for deinit"
 	@echo "  status         Show status of all submodules"
 	@echo "  update-all     Advance all submodules to their current branch's latest commit"
 	@echo "  sync           Sync submodule remotes with .gitmodules"
@@ -33,18 +35,94 @@ help: ## Show this help
 	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
-	@echo "  update-TARGET  Advance one submodule to its current branch's latest commit"
+	@echo "  init-TARGET    Register, sync, and initialize one submodule"
+	@echo "  deinit-TARGET  Remove one submodule's worktree and Git data (CONFIRM=1 required)"
+	@echo "  update-TARGET  Pull latest for a single submodule"
 	@echo "  status-TARGET  Show status for a single submodule"
 
 # Clone submodules that are not checked out yet. Already-initialized
 # submodules are left exactly as-is (no branch switching, no reset):
 # `status` prefixes uninitialized submodules with '-'.
 init:
-	@for path in $$(git submodule status | awk '$$1 ~ /^-/ {print $$2}'); do \
-		echo "Initializing submodule '$$path'..."; \
-		git submodule update --init --recursive -- "$$path"; \
-	done
-	@git submodule status
+	@failed=0; for sub in $(SUBMODULES); do $(MAKE) --no-print-directory -f "$(abspath $(lastword $(MAKEFILE_LIST)))" init-target SUBMODULE="$$sub" || failed=1; done; exit "$$failed"
+
+init-%:
+	@$(MAKE) --no-print-directory -f "$(abspath $(lastword $(MAKEFILE_LIST)))" init-target SUBMODULE="$*"
+
+init-target:
+	@sub="$(SUBMODULE)"; \
+	case "$$sub" in \
+		BioMate) modpath=BioMate; default_url=git@github.com:NationalGenomicsInfrastructure/BioMate.git ;; \
+		genomics-status) modpath=genomics-status; default_url=git@github.com:NationalGenomicsInfrastructure/genomics-status.git ;; \
+		StatusDB_NGI) modpath=StatusDB_NGI; default_url=git@github.com:NationalGenomicsInfrastructure/StatusDB_NGI.git ;; \
+		Yggdrasil) modpath=Yggdrasil; default_url=git@github.com:NationalGenomicsInfrastructure/Yggdrasil.git ;; \
+		demux_realm) modpath=demux_realm; default_url=git@github.com:NationalGenomicsInfrastructure/demux_realm.git ;; \
+		*) echo "ERROR: Unknown submodule '$$sub'"; exit 1 ;; \
+	esac; \
+	configured_path=$$(git config --file .gitmodules --get "submodule.$$sub.path" 2>/dev/null) || configured_path=""; \
+	configured_url=$$(git config --file .gitmodules --get "submodule.$$sub.url" 2>/dev/null) || configured_url=""; \
+	if [ -n "$$configured_path" ] && [ "$$configured_path" != "$$modpath" ]; then echo "ERROR: '$$sub' is registered at unexpected path '$$configured_path'"; exit 1; fi; \
+	if [ -n "$$configured_url" ]; then url="$$configured_url"; else url="$$default_url"; fi; \
+	entry_mode=$$(git ls-files --stage -- "$$modpath" | cut -d' ' -f1); \
+	if [ "$$entry_mode" = "160000" ]; then \
+		if [ -z "$$configured_path" ]; then git config --file .gitmodules "submodule.$$sub.path" "$$modpath" || exit 1; fi; \
+		if [ -z "$$configured_url" ]; then git config --file .gitmodules "submodule.$$sub.url" "$$url" || exit 1; fi; \
+	else \
+		if [ -e "$$modpath" ]; then echo "ERROR: '$$modpath' exists but is not a registered submodule; refusing to replace it"; exit 1; fi; \
+		echo "Registering '$$sub' at '$$modpath'..."; \
+		git submodule add --name "$$sub" "$$url" "$$modpath" || exit 1; \
+	fi; \
+	echo "Syncing and initializing '$$sub'..."; \
+	git submodule sync -- "$$modpath" && git submodule update --init -- "$$modpath" || exit 1; \
+	if [ "$$sub" = "genomics-status" ]; then \
+		nested_path=run_dir/static/nvd3; \
+		nested_status=$$(git -C "$$modpath" submodule status -- "$$nested_path") || exit 1; \
+		case "$$nested_status" in \
+			-*) echo "Cloning uninitialized genomics-status/nvd3..."; git -C "$$modpath" submodule sync -- "$$nested_path" && git -C "$$modpath" submodule update --init -- "$$nested_path" || exit 1 ;; \
+			*) echo "genomics-status/nvd3 is already initialized; leaving it unchanged" ;; \
+		esac; \
+	fi
+
+deinit:
+	@$(MAKE) --no-print-directory -f "$(abspath $(lastword $(MAKEFILE_LIST)))" deinit-targets DEINIT_TARGETS="$(SUBMODULES)"
+
+deinit-all: deinit
+
+deinit-%:
+	@$(MAKE) --no-print-directory -f "$(abspath $(lastword $(MAKEFILE_LIST)))" deinit-targets DEINIT_TARGETS="$*"
+
+deinit-targets:
+	@check_deinit() { \
+		sub="$$1"; \
+		case "$$sub" in \
+			BioMate) expected_path=BioMate ;; \
+			genomics-status) expected_path=genomics-status ;; \
+			StatusDB_NGI) expected_path=StatusDB_NGI ;; \
+			Yggdrasil) expected_path=Yggdrasil ;; \
+			demux_realm) expected_path=demux_realm ;; \
+			*) echo "ERROR: Unknown submodule '$$sub'"; return 1 ;; \
+		esac; \
+		modpath=$$(git config --file .gitmodules --get "submodule.$$sub.path" 2>/dev/null) || modpath=""; \
+		if [ "$$modpath" != "$$expected_path" ]; then echo "ERROR: '$$sub' is not registered at its expected path"; return 1; fi; \
+		if [ "$${CONFIRM:-}" != "1" ]; then echo "ERROR: this removes the checkout and local Git history; rerun with CONFIRM=1"; return 1; fi; \
+		if [ -e "$$modpath" ] && [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then echo "ERROR: '$$sub' has local changes or untracked files; refusing to remove it"; return 1; fi; \
+		modules_root=$$(git rev-parse --path-format=absolute --git-path modules) || return 1; \
+		gitdir=$$(git rev-parse --path-format=absolute --git-path "modules/$$sub") || return 1; \
+		case "$$gitdir" in "$$modules_root"/*) ;; *) echo "ERROR: Refusing unexpected Git directory '$$gitdir'"; return 1 ;; esac; \
+		return 0; \
+	}; \
+	remove_submodule() { \
+		sub="$$1"; \
+		modpath=$$(git config --file .gitmodules --get "submodule.$$sub.path" 2>/dev/null) || return 1; \
+		gitdir=$$(git rev-parse --path-format=absolute --git-path "modules/$$sub") || return 1; \
+		if [ -e "$$modpath/.git" ]; then git submodule deinit --force -- "$$modpath" || return 1; fi; \
+		if [ -e "$$modpath" ]; then rm -rf -- "$$modpath" || return 1; fi; \
+		if [ -e "$$gitdir" ]; then rm -rf -- "$$gitdir" || return 1; fi; \
+		echo "Removed '$$sub' worktree and local Git data; .gitmodules registration is retained"; \
+	}; \
+	failed=0; for sub in $(DEINIT_TARGETS); do check_deinit "$$sub" || failed=1; done; \
+	if [ "$$failed" -ne 0 ]; then exit "$$failed"; fi; \
+	for sub in $(DEINIT_TARGETS); do remove_submodule "$$sub" || failed=1; done; exit "$$failed"
 
 extract-deps:
 	@DEPS=$$(python3 $(CURDIR)/extract_deps.py 2>&1); \
@@ -69,51 +147,66 @@ reset:
 	@git submodule update --init --force --recursive
 	@git submodule status
 
-# Switch the top-level repository to the given branch and check out the
-# submodule commits pinned by that branch. Dirty submodules are left as-is.
-# Argument 1: branch name; argument 2: fallback branch name (optional).
-define USE_BRANCH
-@branch="$(1)"; \
-if git rev-parse --verify --quiet refs/heads/$$branch >/dev/null; then \
-	git checkout "$$branch" || exit 1; \
-elif git rev-parse --verify --quiet refs/remotes/origin/$$branch >/dev/null; then \
-	echo "No local branch '$$branch'; creating it from origin/$$branch"; \
-	git checkout -b "$$branch" "origin/$$branch" || exit 1; \
-else \
-	fallback="$(2)"; \
-	if [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/heads/$$fallback >/dev/null; then \
-		echo "No branch '$(1)' found; using '$(2)' instead"; \
-		git checkout "$$fallback" || exit 1; \
-	elif [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/remotes/origin/$$fallback >/dev/null; then \
-		echo "No branch '$(1)' found; creating '$(2)' from origin/$$fallback"; \
-		git checkout -b "$$fallback" "origin/$$fallback" || exit 1; \
+# Switch single submodule to dev
+use-dev-%:
+	@MODULE="$*"; \
+	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
+	if [ -z "$$MODPATH" ]; then \
+		echo "Error: No submodule named '$$MODULE' found"; \
+		exit 1; \
+	fi; \
+	IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
+	if [ "$$IS_CLEAN" -gt 0 ]; then \
+		echo "WARNING: $$MODULE has uncommitted changes, skipping"; \
+		exit 1; \
+	fi; \
+	echo "Pulling latest for '$$MODULE' before checkout..."; \
+	git -C "$$MODPATH" fetch --all 2>/dev/null; \
+	echo "Switching '$$MODULE' to dev..."; \
+	(cd $$MODPATH && git checkout dev 2>/dev/null) || \
+		(IS_LOCAL=$$(cd $$MODPATH && git branch | grep -c 'dev' 2>/dev/null) && \
+		if [ "$$IS_LOCAL" -gt 0 ]; then \
+			(cd $$MODPATH && git checkout dev || git checkout -b dev --track origin/dev 2>/dev/null); \
+		else \
+			echo "WARNING: Dev branch 'dev' not found in '$$MODULE'"; \
+			exit 1; \
+		fi); \
+	echo "Pulling latest..."; \
+	git -C "$$MODPATH" pull --rebase
+
+# Switch single submodule to main (or master as fallback)
+use-main-%:
+	@MODULE="$*"; \
+	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
+	if [ -z "$$MODPATH" ]; then \
+		echo "Error: No submodule named '$$MODULE' found"; \
+		exit 1; \
+	fi; \
+	IS_CLEAN=$$(cd "$$MODPATH" 2>/dev/null && git status --porcelain 2>/dev/null | wc -l); \
+	if [ "$$IS_CLEAN" -gt 0 ]; then \
+		echo "WARNING: $$MODULE has uncommitted changes, skipping"; \
+		exit 1; \
+	fi; \
+	BRANCH=$$(cd $$MODPATH && git branch -r --list 'origin/main' 2>/dev/null || true); \
+	if echo "$$BRANCH" | grep -q 'main'; then \
+		TARGET="main"; \
 	else \
 		echo "Error: branch '$(1)' not found (locally or on origin)"; \
 		exit 1; \
 	fi; \
-fi; \
-failed=0; \
-echo "Checking out the submodule commits pinned by the branch..."; \
-for sub in $(SUBMODULES); do \
-	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-	if [ -z "$$modpath" ]; then \
-		echo "WARNING: No .gitmodules entry for '$$sub'"; \
-		failed=1; \
-		continue; \
-	fi; \
-	if [ -d "$$modpath" ] && [ -e "$$modpath/.git" ] && [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
-		echo "WARNING: '$$sub' has uncommitted changes; leaving it at its current commit"; \
-		failed=1; \
-		continue; \
-	fi; \
-	if ! git submodule update --init --recursive -- "$$modpath"; then \
-		echo "WARNING: Could not update '$$sub' to the commit pinned by this branch"; \
-		failed=1; \
-	fi; \
-done; \
-git submodule status || failed=1; \
-exit "$$failed"
-endef
+	echo "Pulling latest for '$$MODULE' before checkout..."; \
+	git -C "$$MODPATH" fetch --all 2>/dev/null; \
+	echo "Switching '$$MODULE' to $$TARGET..."; \
+	(cd $$MODPATH && git checkout $$TARGET 2>/dev/null) || \
+		(IS_LOCAL=$$(cd $$MODPATH && git branch | grep -c "$$TARGET" 2>/dev/null) && \
+		if [ "$$IS_LOCAL" -gt 0 ]; then \
+			(cd $$MODPATH && git checkout $$TARGET || git checkout -b $$TARGET --track origin/$$TARGET 2>/dev/null); \
+		else \
+			echo "WARNING: Branch '$$TARGET' not found in '$$MODULE'"; \
+			exit 1; \
+		fi); \
+	echo "Pulling latest..."; \
+	git -C "$$MODPATH" pull --rebase
 
 # Switch the repo to the 'dev' branch and pin the submodules to its commits.
 use-dev:
@@ -146,25 +239,18 @@ update_submodule() { \
 		echo "WARNING: No .gitmodules entry for '$$sub'"; \
 		return 1; \
 	fi; \
-	if [ ! -e "$$modpath/.git" ]; then \
-		echo "Initializing '$$sub' (not cloned yet)..."; \
-		git submodule update --init --recursive -- "$$modpath" || { echo "WARNING: Could not initialize $$sub"; return 1; }; \
-		return 0; \
-	fi; \
-	if [ -n "$$(git -C "$$modpath" status --porcelain --untracked-files=all 2>/dev/null)" ]; then \
-		echo "WARNING: '$$sub' has uncommitted changes; skipping update"; \
-		return 1; \
-	fi; \
-	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
-	if ! git -C "$$modpath" fetch --all; then \
-		echo "WARNING: Could not fetch '$$sub'"; \
-		return 1; \
-	fi; \
-	if [ -z "$$branch" ]; then \
-		echo "Updating detached '$$sub' to origin's default branch..."; \
-		if ! git -C "$$modpath" remote set-head origin --auto >/dev/null; then \
-			echo "WARNING: Could not resolve origin's default branch for '$$sub'"; \
-			return 1; \
+	echo "Pulling latest for '$$MODULE' (branch: $$(cd $$MODPATH && git rev-parse --abbrev-ref HEAD))"; \
+	git -C "$$MODPATH" pull --rebase
+
+update-all: init sync
+	@for sub in $(SUBMODULES); do \
+		MODPATH=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
+		if [ -n "$$MODPATH" ]; then \
+			BRANCH=$$(cd "$$MODPATH" && git rev-parse --abbrev-ref HEAD 2>/dev/null) || continue; \
+			echo "Pulling latest for '$$sub' (branch: $$BRANCH)"; \
+			git -C "$$MODPATH" pull --rebase origin $$BRANCH || echo "WARNING: Could not update $$sub"; \
+		else \
+			echo "WARNING: No .gitmodules entry for $$sub"; \
 		fi; \
 		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
 		if [ -z "$$upstream" ]; then \
