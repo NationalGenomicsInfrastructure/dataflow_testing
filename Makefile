@@ -239,19 +239,8 @@ update_submodule() { \
 		echo "WARNING: No .gitmodules entry for '$$sub'"; \
 		return 1; \
 	fi; \
-	echo "Pulling latest for '$$MODULE' (branch: $$(cd $$MODPATH && git rev-parse --abbrev-ref HEAD))"; \
-	git -C "$$MODPATH" pull --rebase
-
-update-all: init sync
-	@for sub in $(SUBMODULES); do \
-		MODPATH=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
-		if [ -n "$$MODPATH" ]; then \
-			BRANCH=$$(cd "$$MODPATH" && git rev-parse --abbrev-ref HEAD 2>/dev/null) || continue; \
-			echo "Pulling latest for '$$sub' (branch: $$BRANCH)"; \
-			git -C "$$MODPATH" pull --rebase origin $$BRANCH || echo "WARNING: Could not update $$sub"; \
-		else \
-			echo "WARNING: No .gitmodules entry for $$sub"; \
-		fi; \
+	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
+	if [ -z "$$branch" ]; then \
 		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
 		if [ -z "$$upstream" ]; then \
 			echo "WARNING: origin/HEAD is not available for '$$sub'"; \
