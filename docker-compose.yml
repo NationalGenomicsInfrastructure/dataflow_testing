@@ -2,6 +2,10 @@
 #
 #   make compose-up        # statusdb + biomate + yggdrasil
 #   make compose-up-full   # the above + genomics-status (--profile full)
+#   make compose-up-dind   # yggdrasil image with Nextflow + Docker CLI,
+#                          # able to run nf-core pipelines via a docker:dind
+#                          # sidecar (profile "dind"); test with
+#                          # make compose-demux-test
 #   make compose-rebuild   # rebuild all images without cache (recreate containers)
 #   make compose-logs      # follow yggdrasil logs
 #   make compose-reset     # tear everything down, including volumes
@@ -93,10 +97,13 @@ services:
       - yggdrasil-net
 
   yggdrasil:
-    image: dataflow-yggdrasil:latest
+    # Overridable so the same service can run the base image or the
+    # dind-flavoured one (Nextflow + Docker CLI; see
+    # deploy/Dockerfile.yggdrasil.dind, Makefile target compose-up-dind).
+    image: ${YGG_IMAGE:-dataflow-yggdrasil:latest}
     build:
       context: .
-      dockerfile: deploy/Dockerfile.yggdrasil
+      dockerfile: ${YGG_DOCKERFILE:-deploy/Dockerfile.yggdrasil}
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
       YGG_COUCH_PASS: ${STACK_COUCH_PASSWORD:-secret}
@@ -115,11 +122,52 @@ services:
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
+      # Tiny Illumina BCL run for nf-core/demultiplex test runs
+      # (make compose-demux-test); unused by the base image.
+      - ./BioMate/temp:/data/test_run:ro
     depends_on:
       statusdb:
         condition: service_healthy
       biomate:
         condition: service_healthy
+    networks:
+      - yggdrasil-net
+
+  # Docker daemon-in-docker sidecar: lets the dind-flavoured yggdrasil
+  # image run nf-core pipeline containers with -profile docker.
+  # The daemon itself stays arm64 (native runc + network hooks work);
+  # amd64-only pipeline tool images (e.g. samshee, bcl-convert) run as
+  # leaf containers translated by Rosetta — requires Docker Desktop's
+  # "Use Rosetta for x86_64 emulation" to be enabled.
+  # Only started when the "dind" profile is active (compose-up-dind).
+  dind:
+    image: docker:27-dind
+    profiles: ["dind"]
+    privileged: true
+    # Expose the daemon on 0.0.0.0:2375 (plain TCP; TLS is disabled via
+    # DOCKER_TLS_CERTDIR="") so the yggdrasil container can reach it at
+    # $DOCKER_HOST=tcp://dind:2375. The default command only binds the
+    # unix socket.
+    command: ["dockerd", "-H", "unix:///var/run/docker.sock", "-H", "tcp://0.0.0.0:2375"]
+    environment:
+      # The dind image defaults to TLS on :2376 with auto-generated certs
+      # (enabled by DOCKER_TLS_CERTDIR); this stack is local-only, so use
+      # plain TCP on :2375 (matches DOCKER_HOST baked into the
+      # dind-flavoured yggdrasil image).
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - dind-data:/var/lib/docker
+      # Share the ygg-work volume: Nextflow work dirs must be visible
+      # from BOTH containers so the nested daemon can bind-mount them
+      # into pipeline containers (run nextflow with
+      # --work-dir /work/... — see compose-demux-test).
+      - ygg-work:/work
+    healthcheck:
+      test: ["CMD-SHELL", "docker info >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
     networks:
       - yggdrasil-net
 
@@ -131,3 +179,4 @@ volumes:
   ygg-work:
   ygg-events:
   ygg-logs:
+  dind-data:

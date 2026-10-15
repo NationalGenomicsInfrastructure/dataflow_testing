@@ -259,6 +259,30 @@ compose-up-yggdrasil: ## Build and start yggdrasil (plus its deps: statusdb, bio
 compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "full"; plus statusdb)
 	$(COMPOSE) --profile full up -d --build genomics-status
 
+# --- nf-core / Docker-in-Docker (dind-flavoured yggdrasil image) ---------
+#
+# The dind image (deploy/Dockerfile.yggdrasil.dind) is built ON TOP of the
+# base yggdrasil image and adds a JVM, a pinned Nextflow launcher and the
+# Docker CLI client. Pipeline containers run inside a docker:dind sidecar
+# (profile "dind") via DOCKER_HOST=tcp://dind:2375 baked into the image.
+YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
+
+compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sidecar
+	$(COMPOSE) up -d --build
+	docker build -q -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
+	YGG_IMAGE=$(YGG_DIND_IMAGE) $(COMPOSE) up -d yggdrasil
+	$(COMPOSE) --profile dind up -d --wait dind
+	$(call COMPOSE_LINKS,)
+
+# Runs nf-core/demultiplex (bclconvert) on the tiny Illumina run in
+# BioMate/temp, fully inside the stack (yggdrasil container -> DinD).
+# Needs compose-up-dind. Results land in the ygg-work volume at /work/nf-results.
+compose-demux-test: ## Run nf-core/demultiplex on the tiny test run (needs compose-up-dind)
+	$(COMPOSE) --profile dind up -d --wait dind
+	$(COMPOSE) exec -T yggdrasil wait-for-dind
+	$(COMPOSE) exec -T yggdrasil sh -c 'sed "s/\[BCLConvert_Data\]/[Data]/" /data/test_run/SampleSheet.csv > /work/SampleSheet_nfdemux.csv'
+	$(COMPOSE) exec -T yggdrasil nextflow run nf-core/demultiplex --flowcell_id 20260310_LM43899_0385_A12GGASZR5 --flowcell_samplesheet /work/SampleSheet_nfdemux.csv --flowcell_path /data/test_run -profile docker -work-dir /work/nf-work --outdir /work/nf-results -resume
+
 # Rebuild images without any cache, then recreate the containers on the
 # fresh images. --force-recreate makes the recreation explicit even if a
 # rebuild happened to produce the same image ID.
@@ -276,11 +300,11 @@ compose-rebuild-full: ## No-cache rebuild, plus genomics-status (profile "full")
 	$(COMPOSE) --profile full up -d --force-recreate
 	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
 
-# Teardown always passes --profile full so profile-gated services
-# (genomics-status) are covered no matter how the stack was started;
-# down only acts on containers that exist.
+# Teardown always passes --profile full and --profile dind so profile-gated
+# services (genomics-status, the dind sidecar) are covered no matter how the
+# stack was started; down only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
-	$(COMPOSE) --profile full down --remove-orphans
+	$(COMPOSE) --profile full --profile dind down --remove-orphans
 
 compose-logs: ## Follow yggdrasil logs
 	$(COMPOSE) logs -f yggdrasil
@@ -289,7 +313,7 @@ compose-ps: ## Show stack status
 	$(COMPOSE) ps
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
-	$(COMPOSE) --profile full down -v --remove-orphans
+	$(COMPOSE) --profile full --profile dind down -v --remove-orphans
 
 compose-scenario: ## Inject a fresh test scenario into a running stack
 	@curl -sf -X PUT \
