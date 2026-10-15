@@ -69,7 +69,7 @@ several-minute build. Subsequent builds are fast (layer caching).
 ## Quickstart
 
 ```bash
-git clone git@github.com:fagostini/dataflow_testing.git
+git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
 make compose-up      # build + start statusdb, biomate, yggdrasil
@@ -346,5 +346,5 @@ by `compose-up-full`.
 | `StatusDB_NGI` | [NationalGenomicsInfrastructure/StatusDB_NGI](https://github.com/NationalGenomicsInfrastructure/StatusDB_NGI) | CouchDB image + seed data (`statusdb`) |
 | `Yggdrasil` | [NationalGenomicsInfrastructure/Yggdrasil](https://github.com/NationalGenomicsInfrastructure/Yggdrasil) | The orchestration daemon under test |
 | `demux_realm` | [NationalGenomicsInfrastructure/demux_realm](https://github.com/NationalGenomicsInfrastructure/demux_realm) | Yggdrasil realm for demux planning; installed into the Yggdrasil image as realm `dmx_realm` (`--no-deps`), watches the `demux_sample_info` + `flowcell_status` DBs (bootstrapped by the yggdrasil entrypoint). **Requires the Yggdrasil `dev` branch** (handler API `generate_plan_drafts`) |
-| `BioMate` | [fagostini/BioMate](https://github.com/fagostini/BioMate) | Bio-data tooling + web interface (`biomate`) |
-| `genomics-status` | [fagostini/genomics-status](https://github.com/fagostini/genomics-status) | Status dashboard UI (`genomics-status`, profile `full`) |
+| `BioMate` | [NationalGenomicsInfrastructure/BioMate](https://github.com/NationalGenomicsInfrastructure/BioMate) | Bio-data tooling + web interface (`biomate`) |
+| `genomics-status` | [NationalGenomicsInfrastructure/genomics-status](https://github.com/NationalGenomicsInfrastructure/genomics-status) | Status dashboard UI (`genomics-status`, profile `full`) |
