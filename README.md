@@ -36,6 +36,8 @@ execution → event/ops artifacts.
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
 │   ├── yggdrasil-config/main.json
 │   ├── seed/test_scenario_happy_path.json
+│   ├── seed/flowcell_status_biomate.json
+│   ├── seed/demux_sample_info_biomate.json
 │   ├── Dockerfile.genomics-status   # builds on top of the submodule's conda-env image
 │   └── genomics-status/             # stub settings/credentials for the full stack
 ├── Makefile                     # submodule management + compose-* targets
@@ -146,6 +148,34 @@ on restarts (plans are tracked by `run_token`/`executed_run_token` and
 watcher checkpoints are persisted in CouchDB). Use `make compose-reset` for a
 completely fresh state.
 
+The demux workflow (`dmx_realm`) operates on the BioMate seed documents in
+the `flowcell_status` and `demux_sample_info` databases. Seeding those is
+opt-in (a fresh stack starts with those databases empty):
+
+```bash
+make compose-seed-status   # PUTs both seed docs; idempotent (skips if present)
+```
+
+The seeded run triggers the demux workflow once. Any new revision of either
+document re-triggers it, which the two recipes below exploit:
+
+```bash
+make compose-trigger                        # re-touch both docs (repeatable)
+make compose-trigger DBS=flowcell_status    # or just one of them
+make compose-inject                         # +1 random flowcell (fresh ids)
+make compose-inject COUNT=3 LANES=4         # 3 flowcells, 4 lanes each
+make compose-inject DIR=BioMate/temp        # docs built from that run folder's
+                                            # SampleSheet.csv (upserted by flowcell_id)
+```
+
+`compose-inject` generates the documents on the fly from the *live* docs in
+the database (fetched as templates by `deploy/seed/generate_flowcell.py`):
+random mode derives new flowcell/runfolder ids, remaps projects/samples and
+rebases all timestamps to now; `DIR=` mode takes a real run folder (or a
+directory containing one), so the injected documents carry that run's actual
+samplesheet content instead of random data. Re-injecting the same run folder
+replaces the existing documents and re-triggers the workflow.
+
 ### Test recipes
 
 Scenario documents select a recipe via the `recipe` field
@@ -233,11 +263,11 @@ targets:
 | `make init` / `make init-<TARGET>` | Register missing submodules, sync URLs, and initialize root module(s) at parent-pinned commits; clone missing genomics-status/nvd3 |
 | `make deinit CONFIRM=1` / `make deinit-<TARGET> CONFIRM=1` | Remove all/one submodule checkout and local Git database |
 | `make status` / `make status-<TARGET>` | Show submodule state |
-| `make update-<TARGET>` / `make update-all` | Pull latest for one/all submodules |
-| `make use-dev` / `make use-dev-<TARGET>` | Switch to `dev` branches |
-| `make use-main` / `make use-main-<TARGET>` | Switch to `main`/`master` branches |
+| `make update-<TARGET>` / `make update-all` | Advance submodules without switching the parent branch |
+| `make use-dev` | Switch the parent repo to `dev` and apply its pinned submodule commits |
+| `make use-main` | Switch the parent repo to `main` (or `master`) and apply its pinned submodule commits |
 | `make sync` | Sync submodule remotes with `.gitmodules` |
-| `make reset` | Reset submodules to their recorded commits |
+| `make reset` | Destructively clean and reset submodules to their recorded commits |
 | `make extract-deps` | Print a `pixi add ...` one-liner from the submodules' `pyproject.toml` files |
 
 Deinitialization is destructive: it removes the submodule worktree (including
@@ -269,6 +299,9 @@ by `compose-up-full`.
 | `make compose-logs` | Follow yggdrasil logs |
 | `make compose-ps` | Stack status |
 | `make compose-scenario` | Inject a fresh test scenario into the running stack |
+| `make compose-seed-status` | Inject the BioMate `flowcell_status` + `demux_sample_info` seeds (opt-in, idempotent) |
+| `make compose-trigger` | Re-touch the seeded docs (timestamp → now) to re-fire the demux workflow; `DBS=` selects docs |
+| `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 
@@ -299,10 +332,12 @@ by `compose-up-full`.
 - **Genomics Status 500s on `/`** — its stub config is baked into the image;
   after editing anything under `deploy/genomics-status/`, rebuild with
   `make compose-up-full`.
-- **Submodules have uncommitted local changes** — the `use-*`/`update-*`/
-  `reset` targets refuse to touch dirty submodules (by design). The compose
-  stack never writes into submodule trees, so any dirt there came from manual
-  edits.
+- **Submodules have uncommitted local changes** — `use-*` and `update-*` leave
+  dirty submodules at their current commits and report that the requested pin
+  or update was skipped. `make reset` is the explicit destructive option: it
+  cleans untracked files and checks out the commits recorded by the parent.
+  The compose stack never writes into submodule trees, so any dirt there came
+  from manual edits.
 
 ## Submodule provenance
 

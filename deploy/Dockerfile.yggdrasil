@@ -42,8 +42,10 @@ RUN pip install --no-deps -e /app/demux_realm
 # 3) Config, scenario seed and entrypoint. All files ConfigLoader resolves
 #    must live under yggdrasil_workspace/common/configurations/ (CONFIG_DIR).
 COPY deploy/yggdrasil-config/main.json /app/yggdrasil_workspace/common/configurations/main.json
-COPY Yggdrasil/module_registry.json /app/yggdrasil_workspace/common/configurations/module_registry.json
 COPY deploy/seed/test_scenario_happy_path.json /app/scenario_seed.json
+COPY deploy/yggdrasil-data/test_flowcells.zip /Illumina/NextSeq/
+RUN unzip /Illumina/NextSeq/test_flowcells.zip -d /Illumina/NextSeq/ \ 
+    && rm /Illumina/NextSeq/test_flowcells.zip
 COPY deploy/yggdrasil-entrypoint.sh /usr/local/bin/yggdrasil-entrypoint.sh
 RUN chmod +x /usr/local/bin/yggdrasil-entrypoint.sh
 
