@@ -30,6 +30,7 @@ help: ## Show this help
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
 	@echo "  compose-reset-statusdb    Reset CouchDB while Yggdrasil is paused; preserve files (CONFIRM=1)"
+	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and resume it (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
@@ -410,6 +411,38 @@ compose-reset-statusdb: ## Reset databases through the running CouchDB API while
 		trap - 0 INT TERM; \
 	fi; \
 	echo "StatusDB reset and seeded. Yggdrasil restored to its previous state; files and other services were left untouched."
+
+compose-reset-work: ## Clear Yggdrasil's /work volume while it is paused (CONFIRM=1)
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: This deletes all Yggdrasil /work contents, including cached results; rerun with CONFIRM=1"; \
+		exit 1; \
+	fi
+	@set -eu; \
+	ygg_container=$$($(COMPOSE) ps -q yggdrasil); \
+	if [ -z "$$ygg_container" ]; then echo "ERROR: Yggdrasil must be running"; exit 1; fi; \
+	work_volume=$$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/work") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' "$$ygg_container"); \
+	if [ -z "$$work_volume" ]; then echo "ERROR: No named volume mounted at /work; refusing to delete files"; exit 1; fi; \
+	image=$$(docker inspect --format '{{.Image}}' "$$ygg_container"); \
+	ygg_state=$$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' "$$ygg_container"); \
+	paused=0; \
+	case "$$ygg_state" in \
+		"true false") \
+			$(COMPOSE) pause yggdrasil; \
+			paused=1; \
+			trap '$(COMPOSE) unpause yggdrasil' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM ;; \
+		"true true") ;; \
+		*) echo "ERROR: Yggdrasil must be running"; exit 1 ;; \
+	esac; \
+	docker run --rm --network none --user 0 \
+		--mount "type=volume,source=$$work_volume,target=/work" \
+		--entrypoint /bin/sh "$$image" -ec 'find /work -xdev -mindepth 1 -delete'; \
+	if [ "$$paused" = "1" ]; then \
+		$(COMPOSE) unpause yggdrasil; \
+		trap - 0 INT TERM; \
+	fi; \
+	echo "Yggdrasil /work cleared; previous pause state restored. Databases, events, and logs were left untouched."
 
 compose-trigger-rerun: ## Increment run_token on all non-system documents in yggdrasil_plans
 	@set -eu; \
