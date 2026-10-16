@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # curl: used by the entrypoint for CouchDB readiness probes / bootstrap.
 # poppler-utils: runtime dep of pdf2image (some plan steps may render PDFs).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates poppler-utils \
+    && apt-get install -y --no-install-recommends curl ca-certificates poppler-utils unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
