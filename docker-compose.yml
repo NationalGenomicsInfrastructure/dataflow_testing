@@ -113,6 +113,12 @@ services:
       OPS_DB: yggdrasil_ops
       YGG_INJECT_TEST_SCENARIO: ${YGG_INJECT_TEST_SCENARIO:-true}
       YGG_SCENARIO_ID: ${YGG_SCENARIO_ID:-test_scenario:compose-demo}
+      # Put Nextflow's home (pipeline asset clones + caches) on the shared
+      # ygg-work volume: the dind sidecar mounts the same volume at /work,
+      # and nested pipeline containers bind-mount repo-internal files
+      # (e.g. MULTIQC's assets/multiqc_config.yml) through the dind daemon.
+      # Invisible paths make Nextflow stage dangling symlinks there.
+      NXF_HOME: /work/nf-nxf
       PYTHONUNBUFFERED: "1"
     volumes:
       # Bind-mount the demux_realm submodule over the copy baked into the

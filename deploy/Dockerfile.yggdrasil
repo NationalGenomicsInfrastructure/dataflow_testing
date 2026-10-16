@@ -44,7 +44,7 @@ RUN pip install --no-deps -e /app/demux_realm
 COPY deploy/yggdrasil-config/main.json /app/yggdrasil_workspace/common/configurations/main.json
 COPY deploy/seed/test_scenario_happy_path.json /app/scenario_seed.json
 COPY deploy/yggdrasil-data/test_flowcells.zip /Illumina/NextSeq/
-RUN unzip /Illumina/NextSeq/test_flowcells.zip -d /Illumina/NextSeq/ \ 
+RUN python -m zipfile -e /Illumina/NextSeq/test_flowcells.zip /Illumina/NextSeq/ \
     && rm /Illumina/NextSeq/test_flowcells.zip
 COPY deploy/yggdrasil-entrypoint.sh /usr/local/bin/yggdrasil-entrypoint.sh
 RUN chmod +x /usr/local/bin/yggdrasil-entrypoint.sh

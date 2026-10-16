@@ -350,16 +350,34 @@ compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sideca
 	$(COMPOSE) --profile dind up -d --wait dind
 	$(call COMPOSE_LINKS,)
 
-# Runs nf-core/demultiplex (bclconvert) on the tiny Illumina run in
-# BioMate/temp, fully inside the stack (yggdrasil container -> DinD).
-# Needs compose-up-dind. Results land in the ygg-work volume at /work/nf-results.
-compose-demux-test: ## Run nf-core/demultiplex on the tiny test run (needs compose-up-dind)
+# Test flowcells ship as deploy/yggdrasil-data/test_flowcells.zip and are
+# baked into the yggdrasil image at /Illumina/NextSeq/ (see
+# deploy/Dockerfile.yggdrasil). The dind sidecar is a plain docker:dind
+# daemon (no /Illumina), and nested pipeline containers bind-mount the
+# flowcell dirs from ITS filesystem - so compose-demux-test stages the
+# baked tree onto the shared /work volume at a dind-visible path.
+# Default flowcell; pick another with: make compose-demux-test FLOWCELL=<id>
+FLOWCELL ?= 20260310_LM43896_0386_B98QWERTY6
+
+# Runs nf-core/demultiplex (bclconvert) on one of the test flowcells from
+# the zip, fully inside the stack (yggdrasil container -> DinD). Pick the
+# flowcell with FLOWCELL=<id>. Needs compose-up-dind. Results land in the
+# ygg-work volume at /work/nf-results.
+compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose-up-dind; FLOWCELL=<id>)
+	@python3 -c "import sys, zipfile; sys.exit(0 if '$(FLOWCELL)/SampleSheet.csv' in zipfile.ZipFile('deploy/yggdrasil-data/test_flowcells.zip').namelist() else 1)" || { echo "flowcell '$(FLOWCELL)' not in deploy/yggdrasil-data/test_flowcells.zip"; exit 1; }
 	$(COMPOSE) --profile dind up -d --wait dind
 	$(COMPOSE) exec -T yggdrasil wait-for-dind
-	# TODO: sheet format for samshee still WIP (samshee v2 wants a [Data]
-	# section in addition to [BCLConvert_Data]; the sed below only renames)
-	$(COMPOSE) exec -T yggdrasil sh -c 'sed "s/\[BCLConvert_Data\]/[Data]/" /data/test_run/SampleSheet.csv > /work/SampleSheet_nfdemux.csv'
-	$(COMPOSE) exec -T yggdrasil nextflow run nf-core/demultiplex --flowcell_id 20260310_LM43899_0385_A12GGASZR5 --flowcell_samplesheet /work/SampleSheet_nfdemux.csv --flowcell_path /data/test_run -profile docker -work-dir /work/nf-work --outdir /work/nf-results -resume
+	# Stage the zip-baked flowcells onto the shared volume (dind-visible).
+	$(COMPOSE) exec -T yggdrasil sh -c 'mkdir -p /work/flowcells && cp -rn /Illumina/NextSeq/. /work/flowcells/'
+	# NOTE: samshee's samplesheet validation is not up to date with the
+	# latest sheet format (it expects a v2 [Data] section; the shipped
+	# sheets only have [BCLConvert_Data]). SAMSHEE is a validation-only
+	# gate (its formatted output is discarded by the workflow) and
+	# bcl-convert accepts the sheets as-is, so we keep skipping it.
+	# Staging the local resource config: the repo root is not mounted into
+	# the yggdrasil container, so copy it to the shared /work volume.
+	$(COMPOSE) cp deploy/nf/demultiplex_local.config yggdrasil:/work/demultiplex_local.config
+	$(COMPOSE) exec -T yggdrasil nextflow run nf-core/demultiplex --flowcell_id $(FLOWCELL) --flowcell_samplesheet /work/flowcells/$(FLOWCELL)/SampleSheet.csv --flowcell_path /work/flowcells/$(FLOWCELL) --skip_tools samshee -c /work/demultiplex_local.config -profile docker -work-dir /work/nf-work --outdir /work/nf-results -resume
 
 # Rebuild images without any cache, then recreate the containers on the
 # fresh images. --force-recreate makes the recreation explicit even if a
