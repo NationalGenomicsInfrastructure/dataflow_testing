@@ -29,9 +29,11 @@ help: ## Show this help
 	@echo "  compose-logs              Follow yggdrasil logs"
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
+	@echo "  compose-reset-statusdb    Reset CouchDB while Yggdrasil is paused; preserve files (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
+	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
 	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
@@ -239,6 +241,11 @@ update_submodule() { \
 		echo "WARNING: No .gitmodules entry for '$$sub'"; \
 		return 1; \
 	fi; \
+	echo "Fetching remotes for '$$sub'..."; \
+	git -C "$$modpath" fetch --all || { \
+		echo "WARNING: Could not fetch '$$sub'; skipping update"; \
+		return 1; \
+	}; \
 	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
 	if [ -z "$$branch" ]; then \
 		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
@@ -365,6 +372,57 @@ compose-ps: ## Show stack status
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
 	$(COMPOSE) --profile full down -v --remove-orphans
+
+compose-reset-statusdb: ## Reset databases through the running CouchDB API while Yggdrasil is paused (CONFIRM=1)
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: This deletes all databases in the statusdb container; rerun with CONFIRM=1"; \
+		exit 1; \
+	fi
+	@set -eu; \
+	paused=0; \
+	ygg_container=$$($(COMPOSE) ps -q yggdrasil); \
+	if [ -n "$$ygg_container" ]; then \
+		ygg_state=$$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' "$$ygg_container"); \
+		if [ "$$ygg_state" = "true false" ]; then \
+			$(COMPOSE) pause yggdrasil; \
+			paused=1; \
+			trap '$(COMPOSE) unpause yggdrasil' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM; \
+		fi; \
+	fi; \
+	$(COMPOSE) exec -T statusdb bash -euc ' \
+		auth="$${COUCHDB_USER:?}:$${COUCHDB_PASSWORD:?}"; \
+		url="http://localhost:5984"; \
+		test -x /opt/couchdb/scripts/init-seed-data.sh; \
+		databases=$$(curl -fsS --max-time 30 -u "$$auth" "$$url/_all_dbs"); \
+		database_paths=$$(printf "%s" "$$databases" | python3 -c "import json, sys, urllib.parse; print(*[urllib.parse.quote(name, safe=str()) for name in json.load(sys.stdin)], sep=chr(10))"); \
+		rm -f /opt/couchdb/data/.seed_initialized; \
+		for database in $$database_paths; do \
+			curl -fsS --max-time 30 -u "$$auth" -X DELETE "$$url/$$database" >/dev/null; \
+			curl -fsS --max-time 30 -u "$$auth" -X PUT "$$url/$$database" >/dev/null; \
+		done; \
+		/opt/couchdb/scripts/init-seed-data.sh; \
+		test -f /opt/couchdb/data/.seed_initialized; \
+	'; \
+	if [ "$$paused" = "1" ]; then \
+		$(COMPOSE) unpause yggdrasil; \
+		trap - 0 INT TERM; \
+	fi; \
+	echo "StatusDB reset and seeded. Yggdrasil restored to its previous state; files and other services were left untouched."
+
+compose-trigger-rerun: ## Increment run_token on all non-system documents in yggdrasil_plans
+	@set -eu; \
+	documents=$$(curl -fsS --max-time 30 \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		'http://localhost:5984/yggdrasil_plans/_all_docs?include_docs=true'); \
+	body=$$(printf '%s' "$$documents" | python3 -c 'import json, sys; docs = [row["doc"] for row in json.load(sys.stdin)["rows"] if not row["id"].startswith("_")]; assert all(type(doc.get("run_token", 0)) is int for doc in docs), "run_token must be an integer; no documents updated"; print(json.dumps({"docs": [dict(doc, run_token=doc.get("run_token", 0) + 1) for doc in docs]}))'); \
+	result=$$(printf '%s' "$$body" | curl -fsS --max-time 30 -X POST \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		-H 'Content-Type: application/json' \
+		--data-binary @- \
+		'http://localhost:5984/yggdrasil_plans/_bulk_docs'); \
+	printf '%s' "$$result" | python3 -c 'import json, sys; results = json.load(sys.stdin); errors = [row for row in results if "error" in row]; [print("ERROR: " + json.dumps(row), file=sys.stderr) for row in errors]; print("Incremented run_token on %d plan document(s)." % sum(bool(row.get("ok")) for row in results)); sys.exit(bool(errors))'
 
 compose-scenario: ## Inject a fresh test scenario into a running stack
 	@curl -sf -X PUT \
