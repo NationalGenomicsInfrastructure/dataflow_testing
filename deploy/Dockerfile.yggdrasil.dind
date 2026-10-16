@@ -1,0 +1,47 @@
+# Alternative yggdrasil image for running nf-core pipelines (e.g.
+# nf-core/demultiplex) inside the compose stack: adds a JVM, a pinned
+# Nextflow launcher and a static Docker CLI client that talks to the
+# compose "dind" sidecar (docker:dind, profile "dind"), so pipelines can
+# run with -profile docker (docker-in-docker).
+#
+# Build order (see Makefile target `compose-up-dind`):
+#   docker build -f deploy/Dockerfile.yggdrasil      -t dataflow-yggdrasil:latest       .
+#   docker build -f deploy/Dockerfile.yggdrasil.dind -t dataflow-yggdrasil-dind:latest  .
+
+FROM dataflow-yggdrasil:latest
+
+ARG NEXTFLOW_VERSION=26.10.0
+ARG DOCKER_CLI_VERSION=27.5.1
+
+ENV NEXTFLOW_HOME=/opt/nf_home \
+    DOCKER_HOST=tcp://dind:2375 \
+    PATH=/opt/nextflow:$PATH
+
+# JVM (Nextflow) + git (pipeline pulls) + static Docker CLI (client for
+# the DinD sidecar daemon; pinned for reproducibility, arch-aware).
+# Trixie base image: openjdk-17 is gone, use 21.
+ARG TARGETARCH
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-21-jre-headless git \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "${TARGETARCH:-amd64}" in aarch64) arch=aarch64 ;; *) arch=x86_64 ;; esac \
+    && curl -fsSL -o /tmp/docker.tgz \
+        "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz" \
+    && tar xzf /tmp/docker.tgz -C /tmp \
+    && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz \
+    && docker --version
+
+# Pinned Nextflow launcher (deterministic, no install-script surprises).
+RUN mkdir -p /opt/nextflow /opt/nf_home \
+    && curl -fsSL -o /opt/nextflow/nextflow \
+        "https://github.com/nextflow-io/nextflow/releases/download/v${NEXTFLOW_VERSION}/nextflow" \
+    && chmod +x /opt/nextflow/nextflow \
+    && nextflow -version
+
+# Blocks until the DinD daemon answers (call before the first pipeline run).
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'until docker info >/dev/null 2>&1; do echo "waiting for dind daemon..."; sleep 2; done' \
+        > /usr/local/bin/wait-for-dind \
+    && chmod +x /usr/local/bin/wait-for-dind

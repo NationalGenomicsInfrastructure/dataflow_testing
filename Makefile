@@ -342,6 +342,51 @@ compose-up-yggdrasil: ## Build and start yggdrasil (plus its deps: statusdb, bio
 compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "full"; plus statusdb)
 	$(COMPOSE) --profile full up -d --build genomics-status
 
+# --- nf-core / Docker-in-Docker (dind-flavoured yggdrasil image) ---------
+#
+# The dind image (deploy/Dockerfile.yggdrasil.dind) is built ON TOP of the
+# base yggdrasil image and adds a JVM, a pinned Nextflow launcher and the
+# Docker CLI client. Pipeline containers run inside a docker:dind sidecar
+# (profile "dind") via DOCKER_HOST=tcp://dind:2375 baked into the image.
+YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
+
+compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sidecar
+	$(COMPOSE) build yggdrasil
+	docker build -q -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
+	$(COMPOSE) up -d --build statusdb biomate
+	YGG_IMAGE=$(YGG_DIND_IMAGE) $(COMPOSE) up -d yggdrasil
+	$(COMPOSE) --profile dind up -d --wait dind
+	$(call COMPOSE_LINKS,)
+
+# Test flowcells ship as deploy/yggdrasil-data/test_flowcells.zip and are
+# baked into the yggdrasil image at /Illumina/NextSeq/ (see
+# deploy/Dockerfile.yggdrasil). The dind sidecar is a plain docker:dind
+# daemon (no /Illumina), and nested pipeline containers bind-mount the
+# flowcell dirs from ITS filesystem - so compose-demux-test stages the
+# baked tree onto the shared /work volume at a dind-visible path.
+# Default flowcell; pick another with: make compose-demux-test FLOWCELL=<id>
+FLOWCELL ?= 20260310_LM43896_0386_B98QWERTY6
+
+# Runs nf-core/demultiplex (bclconvert) on one of the test flowcells from
+# the zip, fully inside the stack (yggdrasil container -> DinD). Pick the
+# flowcell with FLOWCELL=<id>. Needs compose-up-dind. Results land in the
+# ygg-work volume at /work/nf-results.
+compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose-up-dind; FLOWCELL=<id>)
+	@python3 -c "import sys, zipfile; sys.exit(0 if '$(FLOWCELL)/SampleSheet.csv' in zipfile.ZipFile('deploy/yggdrasil-data/test_flowcells.zip').namelist() else 1)" || { echo "flowcell '$(FLOWCELL)' not in deploy/yggdrasil-data/test_flowcells.zip"; exit 1; }
+	$(COMPOSE) --profile dind up -d --wait dind
+	$(COMPOSE) exec -T yggdrasil wait-for-dind
+	# Stage the zip-baked flowcells onto the shared volume (dind-visible).
+	$(COMPOSE) exec -T yggdrasil sh -c 'mkdir -p /work/flowcells && cp -rn /Illumina/NextSeq/. /work/flowcells/'
+	# NOTE: samshee's samplesheet validation is not up to date with the
+	# latest sheet format (it expects a v2 [Data] section; the shipped
+	# sheets only have [BCLConvert_Data]). SAMSHEE is a validation-only
+	# gate (its formatted output is discarded by the workflow) and
+	# bcl-convert accepts the sheets as-is, so we keep skipping it.
+	# Staging the local resource config: the repo root is not mounted into
+	# the yggdrasil container, so copy it to the shared /work volume.
+	$(COMPOSE) cp deploy/nf/demultiplex_local.config yggdrasil:/work/demultiplex_local.config
+	$(COMPOSE) exec -T yggdrasil nextflow run nf-core/demultiplex --flowcell_id $(FLOWCELL) --flowcell_samplesheet /work/flowcells/$(FLOWCELL)/SampleSheet.csv --flowcell_path /work/flowcells/$(FLOWCELL) --skip_tools samshee -c /work/demultiplex_local.config -profile docker -work-dir /work/nf-work --outdir /work/nf-results -resume
+
 # Rebuild images without any cache, then recreate the containers on the
 # fresh images. --force-recreate makes the recreation explicit even if a
 # rebuild happened to produce the same image ID.
@@ -359,11 +404,11 @@ compose-rebuild-full: ## No-cache rebuild, plus genomics-status (profile "full")
 	$(COMPOSE) --profile full up -d --force-recreate
 	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
 
-# Teardown always passes --profile full so profile-gated services
-# (genomics-status) are covered no matter how the stack was started;
-# down only acts on containers that exist.
+# Teardown always passes --profile full and --profile dind so profile-gated
+# services (genomics-status, the dind sidecar) are covered no matter how the
+# stack was started; down only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
-	$(COMPOSE) --profile full down --remove-orphans
+	$(COMPOSE) --profile full --profile dind down --remove-orphans
 
 compose-logs: ## Follow yggdrasil logs
 	$(COMPOSE) logs -f yggdrasil
@@ -372,7 +417,7 @@ compose-ps: ## Show stack status
 	$(COMPOSE) ps
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
-	$(COMPOSE) --profile full down -v --remove-orphans
+	$(COMPOSE) --profile full --profile dind down -v --remove-orphans
 
 compose-reset-statusdb: ## Reset databases through the running CouchDB API while Yggdrasil is paused (CONFIRM=1)
 	@if [ "$(CONFIRM)" != "1" ]; then \
