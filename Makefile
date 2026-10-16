@@ -361,11 +361,11 @@ FLOWCELL ?= 20260310_LM43896_0386_B98QWERTY6
 
 # Runs nf-core/demultiplex (bclconvert) on one of the test flowcells from
 # the zip, fully inside the stack (yggdrasil container -> DinD). Pick the
-# flowcell with FLOWCELL=<id>. Needs compose-up-dind. Results land in the
-# ygg-work volume at /work/nf-results.
-compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose-up-dind; FLOWCELL=<id>)
+# flowcell with FLOWCELL=<id>. Bootstraps the dind-capable yggdrasil image
+# first so wait-for-dind is available. Results land in the ygg-work volume
+# at /work/nf-results.
+compose-demux-test: compose-up-dind ## Run nf-core/demultiplex on a test flowcell (FLOWCELL=<id>)
 	@python3 -c "import sys, zipfile; sys.exit(0 if '$(FLOWCELL)/SampleSheet.csv' in zipfile.ZipFile('deploy/yggdrasil-data/test_flowcells.zip').namelist() else 1)" || { echo "flowcell '$(FLOWCELL)' not in deploy/yggdrasil-data/test_flowcells.zip"; exit 1; }
-	$(COMPOSE) --profile dind up -d --wait dind
 	$(COMPOSE) exec -T yggdrasil wait-for-dind
 	# Stage the zip-baked flowcells onto the shared volume (dind-visible).
 	$(COMPOSE) exec -T yggdrasil sh -c 'mkdir -p /work/flowcells && cp -rn /Illumina/NextSeq/. /work/flowcells/'
