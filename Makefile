@@ -17,7 +17,7 @@ help: ## Show this help
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
 	@echo ""
 	@echo "Compose targets (Yggdrasil workflow testing environment):"
-	@echo "  compose-up                Build and start the stack (statusdb, biomate, yggdrasil)"
+	@echo "  compose-up                Build and start the stack (statusdb, biomate, dind, yggdrasil)"
 	@echo "  compose-up-full           Same as compose-up plus genomics-status (profile full)"
 	@echo "  compose-up-statusdb       Build and start only statusdb"
 	@echo "  compose-up-biomate        Build and start only biomate"
@@ -309,15 +309,17 @@ define COMPOSE_LINKS
 $(1)
 endef
 
-compose-up: ## Build and start statusdb, biomate and yggdrasil
-	$(COMPOSE) up -d --build
+compose-up: compose-build-yggdrasil ## Build and start statusdb, biomate, dind and yggdrasil
+	$(COMPOSE) build
+	$(COMPOSE) up -d
 	$(call COMPOSE_LINKS,)
 
 compose-build-gs-base: ## Build the genomics-status base image (conda env)
 	docker build -q -t dataflow-genomics-status-base:latest ./genomics-status
 
-compose-up-full: compose-build-gs-base ## compose-up plus genomics-status (profile "full")
-	$(COMPOSE) --profile full up -d --build
+compose-up-full: compose-build-gs-base compose-build-yggdrasil ## compose-up plus genomics-status (profile "full")
+	$(COMPOSE) --profile full build
+	$(COMPOSE) --profile full up -d
 	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
 
 # Per-service targets (mainly for testing). Compose also starts the
@@ -328,32 +330,29 @@ compose-up-statusdb: ## Build and start only statusdb
 compose-up-biomate: ## Build and start only biomate
 	$(COMPOSE) up -d --build biomate
 
-compose-up-yggdrasil: ## Build and start yggdrasil (plus its deps: statusdb, biomate)
+compose-up-yggdrasil: compose-build-yggdrasil ## Build and start yggdrasil (plus its deps: statusdb, biomate, dind)
 	$(COMPOSE) up -d --build yggdrasil
 
 compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "full"; plus statusdb)
 	$(COMPOSE) --profile full up -d --build genomics-status
 
-# --- nf-core / Docker-in-Docker (dind-flavoured yggdrasil image) ---------
+# --- nf-core / Docker-in-Docker (yggdrasil images) -----------------------
 #
-# The dind image (deploy/Dockerfile.yggdrasil.dind) is built ON TOP of the
-# base yggdrasil image and adds a JVM, a pinned Nextflow launcher and the
-# Docker CLI client. Pipeline containers run inside a docker:dind sidecar
-# (profile "dind") via DOCKER_HOST=tcp://dind:2375 baked into the image.
+# The yggdrasil service runs the dind image (deploy/Dockerfile.yggdrasil.dind),
+# built ON TOP of the base image (deploy/Dockerfile.yggdrasil) and adding a
+# JVM, a pinned Nextflow launcher and the Docker CLI client. Pipeline
+# containers run inside the docker:dind sidecar (service "dind") via
+# DOCKER_HOST=tcp://dind:2375 baked into the image. The entrypoint stages
+# the zip-baked flowcells onto the shared /work volume
+# (/work/Illumina/NextSeq) and the resource config to
+# /work/demultiplex_local.config before the daemon starts (see
+# deploy/yggdrasil-entrypoint.sh and the DMX_* vars in docker-compose).
+YGG_BASE_IMAGE := dataflow-yggdrasil:latest
 YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
 
-compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sidecar
-	$(COMPOSE) build yggdrasil
+compose-build-yggdrasil: ## Build the base + dind-flavoured yggdrasil images
+	docker build -q -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
 	docker build -q -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
-	$(COMPOSE) up -d --build statusdb biomate
-	# dind first, awaited: the daemon must never race the daemon-in-daemon.
-	# The yggdrasil entrypoint stages the zip-baked flowcells onto the
-	# shared /work volume (/work/Illumina/NextSeq) and the resource config
-	# to /work/demultiplex_local.config before the daemon starts (see
-	# deploy/yggdrasil-entrypoint.sh and the DMX_* vars in docker-compose).
-	$(COMPOSE) --profile dind up -d --wait dind
-	YGG_IMAGE=$(YGG_DIND_IMAGE) $(COMPOSE) up -d yggdrasil
-	$(call COMPOSE_LINKS,)
 
 # Test flowcells ship as deploy/yggdrasil-data/test_flowcells.zip and are
 # baked into the yggdrasil image at /Illumina/NextSeq/ (see
@@ -368,11 +367,11 @@ FLOWCELL ?= 20260310_LM43896_0386_B98QWERTY6
 
 # Runs nf-core/demultiplex (bclconvert) on one of the test flowcells from
 # the zip, fully inside the stack (yggdrasil container -> DinD). Pick the
-# flowcell with FLOWCELL=<id>. Needs compose-up-dind. Results land in the
+# flowcell with FLOWCELL=<id>. Needs compose-up. Results land in the
 # ygg-work volume at /work/nf-results.
-compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose-up-dind; FLOWCELL=<id>)
+compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose-up; FLOWCELL=<id>)
 	@python3 -c "import sys, zipfile; sys.exit(0 if '$(FLOWCELL)/SampleSheet.csv' in zipfile.ZipFile('deploy/yggdrasil-data/test_flowcells.zip').namelist() else 1)" || { echo "flowcell '$(FLOWCELL)' not in deploy/yggdrasil-data/test_flowcells.zip"; exit 1; }
-	$(COMPOSE) --profile dind up -d --wait dind
+	$(COMPOSE) up -d --wait dind
 	$(COMPOSE) exec -T yggdrasil wait-for-dind
 	$(COMPOSE) exec -T yggdrasil sh -c 'test -d /work/Illumina/NextSeq/$(FLOWCELL)' || { echo "runfolder $(FLOWCELL) not staged under /work/Illumina/NextSeq (entrypoint)"; exit 1; }
 	# NOTE: samshee's samplesheet validation is not up to date with the
@@ -387,6 +386,8 @@ compose-demux-test: ## Run nf-core/demultiplex on a test flowcell (needs compose
 # rebuild happened to produce the same image ID.
 compose-rebuild: ## Rebuild all images without cache and recreate the stack
 	$(COMPOSE) build --no-cache
+	docker build -q --no-cache -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
+	docker build -q --no-cache -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
 	$(COMPOSE) up -d --force-recreate
 	$(call COMPOSE_LINKS,)
 
@@ -396,14 +397,16 @@ compose-rebuild: ## Rebuild all images without cache and recreate the stack
 compose-rebuild-full: ## No-cache rebuild, plus genomics-status (profile "full")
 	docker build -q --no-cache -t dataflow-genomics-status-base:latest ./genomics-status
 	$(COMPOSE) --profile full build --no-cache
+	docker build -q --no-cache -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
+	docker build -q --no-cache -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
 	$(COMPOSE) --profile full up -d --force-recreate
 	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
 
-# Teardown always passes --profile full and --profile dind so profile-gated
-# services (genomics-status, the dind sidecar) are covered no matter how the
-# stack was started; down only acts on containers that exist.
+# Teardown always passes --profile full so profile-gated services
+# (genomics-status) are covered no matter how the stack was started; down
+# only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
-	$(COMPOSE) --profile full --profile dind down --remove-orphans
+	$(COMPOSE) --profile full down --remove-orphans
 
 compose-logs: ## Follow yggdrasil logs
 	$(COMPOSE) logs -f yggdrasil
@@ -412,7 +415,7 @@ compose-ps: ## Show stack status
 	$(COMPOSE) ps
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
-	$(COMPOSE) --profile full --profile dind down -v --remove-orphans
+	$(COMPOSE) --profile full down -v --remove-orphans
 
 compose-scenario: ## Inject a fresh test scenario into a running stack
 	@curl -sf -X PUT \
