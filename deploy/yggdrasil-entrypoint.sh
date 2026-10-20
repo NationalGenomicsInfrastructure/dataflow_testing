@@ -12,6 +12,8 @@
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
 #   5. (optional) a test scenario document is injected into the stack
+#   5b. (dev data) the zip-baked flowcells are staged onto the shared
+#       /work volume where the dind sidecar can see them
 #   6. (optional) genomics-status is reachable, when it is part of this stack
 #
 # It then hands over to the requested yggdrasil command (default: `--dev daemon`).
@@ -139,6 +141,30 @@ if [ "${YGG_INJECT_TEST_SCENARIO:-true}" = "true" ]; then
 else
     log "YGG_INJECT_TEST_SCENARIO=false; not injecting a test scenario"
 fi
+
+# 5b. Stage the development data onto the shared /work volume, at the paths
+#     the compose env points the realm at (DMX_HPC_BASE_PATH, DMX_NF_CONFIG):
+#     - the zip-baked test flowcells (/Illumina/NextSeq, present in this
+#       image) are copied to /work/Illumina/NextSeq so the dind sidecar -
+#       which mounts the same volume but not /Illumina - can serve them to
+#       the nested pipeline containers;
+#     - the dind image ships the local Nextflow resource config at
+#       /etc/demux (the base image does not; nothing to do in that case).
+#     Both copies are no-clobber and re-run on every (re)start, so they
+#     finish before the daemon can plan anything.
+stage_dev_data() {
+    if [ -d /Illumina/NextSeq ] && [ -d /work ]; then
+        log "Staging test flowcells: /Illumina/NextSeq -> /work/Illumina/NextSeq"
+        mkdir -p /work/Illumina/NextSeq
+        cp -rn /Illumina/NextSeq/. /work/Illumina/NextSeq/
+    fi
+    if [ -f /etc/demux/demultiplex_local.config ] && [ ! -e /work/demultiplex_local.config ]; then
+        log "Staging Nextflow resource config to /work/demultiplex_local.config"
+        cp /etc/demux/demultiplex_local.config /work/demultiplex_local.config
+    fi
+}
+
+stage_dev_data
 
 # 6. Optional UI service (only present with --profile full).
 wait_for_service "genomics-status" 9761 "genomics-status" 300
