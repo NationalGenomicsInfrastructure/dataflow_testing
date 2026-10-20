@@ -39,6 +39,12 @@ RUN mkdir -p /opt/nextflow /opt/nf_home \
     && chmod +x /opt/nextflow/nextflow \
     && nextflow -version
 
+# Laptop-sized resource overrides for the realm's pipeline runs. The
+# entrypoint copies it to /work/demultiplex_local.config on the shared
+# volume; compose sets DMX_NF_CONFIG to that path.
+RUN mkdir -p /etc/demux
+COPY deploy/nf/demultiplex_local.config /etc/demux/demultiplex_local.config
+
 # Blocks until the DinD daemon answers (call before the first pipeline run).
 RUN printf '%s\n' \
         '#!/bin/sh' \
