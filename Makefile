@@ -414,8 +414,16 @@ compose-logs: ## Follow yggdrasil logs
 compose-ps: ## Show stack status
 	$(COMPOSE) ps
 
-compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
-	$(COMPOSE) --profile full down -v --remove-orphans
+# dind-data is kept: it caches the nested (mostly amd64) pipeline images,
+# and re-pulling those is the slow part of a fresh boot.
+compose-reset: ## Stop the stack and remove all volumes except dind-data (fresh CouchDB on next up)
+	$(COMPOSE) --profile full down --remove-orphans
+	@for v in $$(docker volume ls -q --filter name=dataflow-testing_); do \
+		case "$$v" in \
+		*dind-data*) echo "Keeping $$v (nested pipeline image cache)" ;; \
+		*) docker volume rm "$$v" ;; \
+		esac; \
+	done
 
 compose-scenario: ## Inject a fresh test scenario into a running stack
 	@curl -sf -X PUT \
