@@ -72,7 +72,7 @@ several-minute build. Subsequent builds are fast (layer caching).
 git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
-make compose-up      # build + start statusdb, biomate, yggdrasil
+make compose-up      # build + start the stack (statusdb, biomate, dind, yggdrasil)
 ```
 
 That's it. What happens automatically:
@@ -80,8 +80,8 @@ That's it. What happens automatically:
 1. `statusdb` starts CouchDB and (on a fresh volume) seeds the `projects`,
    `gs_users`, `gs_configs`, `server_status` databases in the background.
 2. `biomate` serves its web interface on port 8765.
-3. `yggdrasil` starts only after `statusdb` **and** `biomate` report healthy
-   (`depends_on: condition: service_healthy`), then its entrypoint:
+3. `yggdrasil` starts only after `statusdb`, `biomate` **and** the `dind`
+   sidecar report healthy (`depends_on: condition: service_healthy`), then its entrypoint:
    - waits until CouchDB answers `/_up` **and** the seeded `projects` DB
      exists (CouchDB being "up" is not enough — the seed runs afterwards),
    - creates the `yggdrasil`, `yggdrasil_plans`, `yggdrasil_ops` databases
@@ -95,6 +95,12 @@ That's it. What happens automatically:
    `yggdrasil_plans`, executes it via the Engine, and writes `plan_status`
    documents to `yggdrasil_ops`. Step artifacts land in the `ygg-work` and
    `ygg-events` volumes.
+
+The `dind` sidecar is a plain docker daemon in a container: the yggdrasil
+image ships Nextflow and runs nf-core pipelines (e.g. `nf-core/demultiplex`)
+as nested containers through it. On Apple Silicon the amd64-only pipeline
+tool images need Docker Desktop's "Use Rosetta for x86_64 emulation".
+To run a pipeline by hand: `make compose-demux-test FLOWCELL=<id>`.
 
 ### Verify it worked
 
@@ -233,7 +239,8 @@ Where things live:
   change `STACK_COUCH_*`, update `deploy/genomics-status/settings.yaml` too.
 - **Volumes**: `couchdb-data` (CouchDB, incl. seed marker and Yggdrasil
   state), `ygg-work` (plan step artifacts), `ygg-events` (event JSON spool),
-  `ygg-logs` (daemon log files).
+  `ygg-logs` (daemon log files), `dind-data` (nested pipeline image cache;
+  kept by `compose-reset` because re-pulling those images is slow).
 
 ## How it works (short version)
 
@@ -289,11 +296,11 @@ by `compose-up-full`.
 
 | Target | Purpose |
 |--------|---------|
-| `make compose-up` | Build + start statusdb, biomate, yggdrasil |
+| `make compose-up` | Build + start the stack (statusdb, biomate, dind, yggdrasil with Nextflow) |
 | `make compose-up-full` | Same, plus genomics-status (profile `full`) |
 | `make compose-up-statusdb` | Build + start only statusdb |
 | `make compose-up-biomate` | Build + start only biomate |
-| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its deps: statusdb, biomate) |
+| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its deps: statusdb, biomate, dind) |
 | `make compose-up-genomics-status` | Build + start genomics-status (profile `full`; also starts statusdb) |
 | `make compose-build-gs-base` | Build only the genomics-status base image (conda env) |
 | `make compose-logs` | Follow yggdrasil logs |
@@ -302,6 +309,7 @@ by `compose-up-full`.
 | `make compose-seed-status` | Inject the BioMate `flowcell_status` + `demux_sample_info` seeds (opt-in, idempotent) |
 | `make compose-trigger` | Re-touch the seeded docs (timestamp → now) to re-fire the demux workflow; `DBS=` selects docs |
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
+| `make compose-demux-test` | Run nf-core/demultiplex on a test flowcell (`FLOWCELL=<id>`); needs `compose-up` |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 

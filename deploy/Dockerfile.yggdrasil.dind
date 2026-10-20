@@ -1,10 +1,9 @@
-# Alternative yggdrasil image for running nf-core pipelines (e.g.
-# nf-core/demultiplex) inside the compose stack: adds a JVM, a pinned
-# Nextflow launcher and a static Docker CLI client that talks to the
-# compose "dind" sidecar (docker:dind, profile "dind"), so pipelines can
-# run with -profile docker (docker-in-docker).
+# The yggdrasil image for the compose stack: the base image plus a JVM, a
+# pinned Nextflow launcher and a static Docker CLI client that talks to
+# the compose "dind" sidecar (docker:dind), so nf-core pipelines (e.g.
+# nf-core/demultiplex) can run with -profile docker (docker-in-docker).
 #
-# Build order (see Makefile target `compose-up-dind`):
+# Build order (see Makefile target `compose-build-yggdrasil`):
 #   docker build -f deploy/Dockerfile.yggdrasil      -t dataflow-yggdrasil:latest       .
 #   docker build -f deploy/Dockerfile.yggdrasil.dind -t dataflow-yggdrasil-dind:latest  .
 
