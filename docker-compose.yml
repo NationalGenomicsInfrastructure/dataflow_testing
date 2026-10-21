@@ -32,6 +32,20 @@ services:
       - "5984:5984"
     volumes:
       - couchdb-data:/opt/couchdb/data
+      # Test-flowcell seeds live in deploy/seed (not in the submodule —
+      # they are only needed by this testing environment). The image's
+      # init-seed-data.sh loads every subdirectory of
+      # /opt/couchdb/seed_data as a same-named database at first boot,
+      # so these mounts are picked up automatically. Re-seeding only
+      # happens after make compose-reset (the INIT_MARKER lives on the
+      # couchdb-data volume).
+      # Deliberately not :ro — the image entrypoint chowns everything
+      # under /opt/couchdb at boot (and aborts on a read-only mount), so
+      # first boot hands ownership of the mounted files to the image's
+      # couchdb user (uid 5984); `sudo chown -R $(id -u):$(id -g)` on
+      # the two directories restores editability.
+      - ./deploy/seed/demux_sample_info:/opt/couchdb/seed_data/demux_sample_info
+      - ./deploy/seed/flowcell_status:/opt/couchdb/seed_data/flowcell_status
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5984/_up"]
       interval: 5s
