@@ -190,7 +190,7 @@ replaces the existing documents and re-triggers the workflow.
 
 Scenario documents select a recipe via the `recipe` field
 (`deploy/seed/test_scenario_happy_path.json` is the template; change `recipe`
-and `PUT` to `http://localhost:5984/yggdrasil/<your-id>`):
+and `PUT` to `http://localhost:5984/yggdrasil_testdocs/<your-id>`):
 
 | Recipe | Behaviour |
 |--------|-----------|
@@ -248,7 +248,7 @@ Where things live:
 ## How it works (short version)
 
 ```
-scenario doc (type=ygg_test_scenario) in the `yggdrasil` DB
+scenario doc (type=ygg_test_scenario) in the `yggdrasil_testdocs` DB
   → WatcherManager (CouchDB changes feed, replays from start_seq=0)
   → test_realm handler generates a plan from the recipe
   → plan persisted to `yggdrasil_plans` (auto_run ⇒ approved)

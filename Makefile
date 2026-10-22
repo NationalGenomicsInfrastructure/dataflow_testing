@@ -416,7 +416,7 @@ compose-scenario: ## Inject a fresh test scenario into a running stack
 		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
 		-H 'Content-Type: application/json' \
 		--data-binary @deploy/seed/test_scenario_happy_path.json \
-		"http://localhost:5984/yggdrasil/test_scenario:manual-$$(date +%s)" && \
+		"http://localhost:5984/yggdrasil_testdocs/test_scenario:manual-$$(date +%s)" && \
 		echo "Scenario injected; watch it with: make compose-logs"
 
 # Opt-in seeding of the BioMate workflow documents. Each seed keeps the

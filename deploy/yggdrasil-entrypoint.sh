@@ -112,13 +112,18 @@ wait_for_service() {
 inject_scenario() {
     local id="${YGG_SCENARIO_ID:-test_scenario:compose-demo}"
     local code
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil/${id}")"
+    # The scenario doc goes into yggdrasil_testdocs: that is the DB
+    # test_realm watches (connection "yggdrasil_testdocs" in
+    # yggdrasil-config/main.json; start_seq=0). The `yggdrasil` DB is
+    # only test_realm's read/write data_access — docs written there
+    # are never seen by the watcher.
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil_testdocs/${id}")"
     if [ "${code}" = "404" ]; then
         curl -sf -X PUT "${AUTH[@]}" \
             -H 'Content-Type: application/json' \
             --data-binary @/app/scenario_seed.json \
-            "${COUCH_URL}/yggdrasil/${id}" >/dev/null
-        log "Injected test scenario '${id}' into the yggdrasil database"
+            "${COUCH_URL}/yggdrasil_testdocs/${id}" >/dev/null
+        log "Injected test scenario '${id}' into the yggdrasil_testdocs database"
     else
         log "Test scenario '${id}' already present (HTTP ${code}); skipping injection"
     fi
@@ -130,10 +135,13 @@ wait_for_http "${COUCH_URL}/_up" "CouchDB" 180
 # 2. Seeded projects database (statusdb seeds it in the background).
 wait_for_db "projects" 300
 
-# 3. Yggdrasil's own databases.
+# 3. Yggdrasil's own databases. yggdrasil_testdocs is the scenario DB:
+# test_realm's watcher (connection "yggdrasil_testdocs" in
+# yggdrasil-config/main.json) dies with a 404 if it is missing.
 create_db "yggdrasil"
 create_db "yggdrasil_plans"
 create_db "yggdrasil_ops"
+create_db "yggdrasil_testdocs"
 
 # 4. Databases watched by the dmx_realm realm (demux_realm package).
 create_db "demux_sample_info"
