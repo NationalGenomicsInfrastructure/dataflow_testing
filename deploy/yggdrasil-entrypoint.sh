@@ -75,7 +75,9 @@ create_db() {
 wait_for_service() {
     # Wait for an optional service on the compose network.
     # If the host does not resolve, the service is not part of this
-    # stack and the wait is skipped.
+    # stack and the wait is skipped. This is a soft gate: if the
+    # service never becomes ready, a warning is logged and the daemon
+    # is started anyway (it does not depend on the service).
     # $1 = host, $2 = port, $3 = name, $4 = timeout seconds
     local host="$1" port="$2" name="$3" timeout="${4:-300}" waited=0 resolvable=0
     # Retry DNS resolution briefly: a freshly (re)started container may need
@@ -92,12 +94,16 @@ wait_for_service() {
         return 0
     fi
     log "Waiting for ${name} at http://${host}:${port}/ (timeout ${timeout}s)..."
-    until curl -sf -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
+    # --connect-timeout/--max-time keep every probe bounded: on networks
+    # where the name resolves to an unreachable host (e.g. an org DNS
+    # entry), an unbounded curl would hang forever and the deadline
+    # below would never be reached.
+    until curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
         sleep 2
         waited=$((waited + 2))
         if [ "${waited}" -ge "${timeout}" ]; then
-            log "ERROR: ${name} did not become ready within ${timeout}s"
-            return 1
+            log "WARNING: ${name} did not become ready within ${timeout}s; continuing without it"
+            return 0
         fi
     done
     log "${name} is ready"
