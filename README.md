@@ -13,14 +13,14 @@ execution → event/ops artifacts.
   :5984 ───────────►│ statusdb      CouchDB 3.4, seeds projects/gs_users/... on first boot │
                     │        ▲                                                             │
                     │        │ http://statusdb:5984                                        │
-  :8765 ───────────►│ biomate     BioMate web interface                                    │
+  :8765 ───────────►│ biomate     BioMate web interface (only with --profile full)         │
                     │                                                                      │
   :9761 ───────────►│ genomics-status  (only with --profile full)                          │
                     │        ▲                                                             │
                     │        │ (stub config → statusdb)                                    │
                     │  ┌────────────────────────────────────────────────────────────────┐  │
                     │  │ yggdrasil daemon (yggdrasil --dev daemon)                      │  │
-                    │  │ depends_on: statusdb + biomate healthy                         │  │
+                    │  │ depends_on: statusdb healthy                                   │  │
                     │  │ entrypoint: wait CouchDB → wait seeded DBs → create ygg DBs    │  │
                     │  │            → inject test scenario → start daemon               │  │
                     │  └────────────────────────────────────────────────────────────────┘  │
@@ -30,7 +30,7 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (statusdb, biomate, yggdrasil, genomics-status)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil; profile full adds biomate + genomics-status)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
@@ -74,7 +74,7 @@ several-minute build. Subsequent builds are fast (layer caching).
 git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
-make compose-up      # build + start statusdb, biomate, yggdrasil
+make compose-up      # build + start statusdb, yggdrasil
 ```
 
 That's it. What happens automatically:
@@ -84,22 +84,26 @@ That's it. What happens automatically:
    plus `flowcell_status` and `demux_sample_info` with four test flowcells
    each, from `deploy/seed/` (bind-mounted into the container; see
    `docker-compose.yml`).
-2. `biomate` serves its web interface on port 8765.
-3. `yggdrasil` starts only after `statusdb` **and** `biomate` report healthy
+2. `yggdrasil` starts only after `statusdb` reports healthy
    (`depends_on: condition: service_healthy`), then its entrypoint:
    - waits until CouchDB answers `/_up` **and** the seeded `projects` DB
      exists (CouchDB being "up" is not enough — the seed runs afterwards),
-   - creates the `yggdrasil`, `yggdrasil_plans`, `yggdrasil_ops` databases
-     (Yggdrasil fails fast at startup if any of its databases are missing),
+   - creates the `yggdrasil`, `yggdrasil_plans`, `yggdrasil_ops`,
+     `yggdrasil_testdocs` databases (Yggdrasil fails fast at startup if any
+     of its databases are missing),
    - injects a `happy_path` test scenario document (skip with
      `YGG_INJECT_TEST_SCENARIO=false`),
    - starts `yggdrasil --dev daemon` (`--dev` enables the built-in
      `test_realm` used for testing).
-4. The daemon replays the changes feed from the beginning, picks up the
+3. The daemon replays the changes feed from the beginning, picks up the
    scenario, generates a plan from the `happy_path` recipe, persists it to
    `yggdrasil_plans`, executes it via the Engine, and writes `plan_status`
    documents to `yggdrasil_ops`. Step artifacts land in the `ygg-work` and
    `ygg-events` volumes.
+
+(The `biomate` web interface on port 8765 only comes up with
+`make compose-up-full` — profile `full`; nothing in the core stack needs
+it, so it is no longer a yggdrasil dependency.)
 
 ### Verify it worked
 
@@ -134,7 +138,7 @@ UIs on the host:
 | Port | Service |
 |------|---------|
 | 5984 | CouchDB (StatusDB) — `_all_docs`, `_changes`, etc. |
-| 8765 | BioMate web interface |
+| 8765 | BioMate web interface (only in the `full` profile) |
 | 9761 | Genomics Status (only in the `full` profile) |
 
 ## Firing more work
@@ -299,11 +303,11 @@ by `compose-up-full`.
 
 | Target | Purpose |
 |--------|---------|
-| `make compose-up` | Build + start statusdb, biomate, yggdrasil |
-| `make compose-up-full` | Same, plus genomics-status (profile `full`) |
+| `make compose-up` | Build + start statusdb, yggdrasil |
+| `make compose-up-full` | Same, plus biomate and genomics-status (profile `full`) |
 | `make compose-up-statusdb` | Build + start only statusdb |
-| `make compose-up-biomate` | Build + start only biomate |
-| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its deps: statusdb, biomate) |
+| `make compose-up-biomate` | Build + start only biomate (profile `full`) |
+| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its dep: statusdb) |
 | `make compose-up-genomics-status` | Build + start genomics-status (profile `full`; also starts statusdb) |
 | `make compose-build-gs-base` | Build only the genomics-status base image (conda env) |
 | `make compose-logs` | Follow yggdrasil logs |

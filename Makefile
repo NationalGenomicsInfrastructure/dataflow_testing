@@ -17,14 +17,14 @@ help: ## Show this help
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
 	@echo ""
 	@echo "Compose targets (Yggdrasil workflow testing environment):"
-	@echo "  compose-up                Build and start the stack (statusdb, biomate, yggdrasil)"
-	@echo "  compose-up-full           Same as compose-up plus genomics-status (profile full)"
+	@echo "  compose-up                Build and start the stack (statusdb, yggdrasil)"
+	@echo "  compose-up-full           Same as compose-up plus biomate + genomics-status (profile full)"
 	@echo "  compose-up-statusdb       Build and start only statusdb"
-	@echo "  compose-up-biomate        Build and start only biomate"
-	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its deps)"
+	@echo "  compose-up-biomate        Build and start only biomate (profile full)"
+	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its dep: statusdb)"
 	@echo "  compose-up-genomics-status  Build and start genomics-status (profile full)"
-	@echo "  compose-rebuild           Rebuild all images without cache and recreate the stack"
-	@echo "  compose-rebuild-full      Same, plus genomics-status (profile full)"
+	@echo "  compose-rebuild           Rebuild statusdb + yggdrasil images without cache; recreate the stack"
+	@echo "  compose-rebuild-full      Same, plus biomate and genomics-status (profile full)"
 	@echo "  compose-down              Stop and remove the stack (volumes are kept)"
 	@echo "  compose-logs              Follow yggdrasil logs"
 	@echo "  compose-ps                Show stack status"
@@ -305,30 +305,33 @@ define COMPOSE_LINKS
 	@echo ""
 	@echo "Stack is up. Web services:"
 	@printf '  StatusDB (CouchDB Fauxton): http://localhost:5984/_utils/  (login: %s / %s)\n' '$(CREDENTIAL_USER)' '$(CREDENTIAL_PASSWORD)'
-	@echo "  BioMate:                    http://localhost:8765"
 $(1)
 endef
 
-compose-up: ## Build and start statusdb, biomate and yggdrasil
+# Extra link lines for the services that only run with profile "full"
+# (biomate and genomics-status); passed via $(1) by those targets.
+FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n  Genomics Status:            http://localhost:9761\n'
+
+compose-up: ## Build and start statusdb and yggdrasil
 	$(COMPOSE) up -d --build
 	$(call COMPOSE_LINKS,)
 
 compose-build-gs-base: ## Build the genomics-status base image (conda env)
 	docker build -q -t dataflow-genomics-status-base:latest ./genomics-status
 
-compose-up-full: compose-build-gs-base ## compose-up plus genomics-status (profile "full")
+compose-up-full: compose-build-gs-base ## compose-up plus biomate and genomics-status (profile "full")
 	$(COMPOSE) --profile full up -d --build
-	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
+	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Per-service targets (mainly for testing). Compose also starts the
 # depends_on closure of the requested service.
 compose-up-statusdb: ## Build and start only statusdb
 	$(COMPOSE) up -d --build statusdb
 
-compose-up-biomate: ## Build and start only biomate
-	$(COMPOSE) up -d --build biomate
+compose-up-biomate: ## Build and start only biomate (profile "full")
+	$(COMPOSE) --profile full up -d --build biomate
 
-compose-up-yggdrasil: ## Build and start yggdrasil (plus its deps: statusdb, biomate)
+compose-up-yggdrasil: ## Build and start yggdrasil (plus its dep: statusdb)
 	$(COMPOSE) up -d --build yggdrasil
 
 compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "full"; plus statusdb)
@@ -345,10 +348,10 @@ YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
 compose-up-dind: ## Stack with the nf-core-capable yggdrasil image + dind sidecar
 	$(COMPOSE) build yggdrasil
 	docker build -q -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
-	$(COMPOSE) up -d --build statusdb biomate
+	$(COMPOSE) --profile full up -d --build statusdb biomate
 	YGG_IMAGE=$(YGG_DIND_IMAGE) $(COMPOSE) up -d yggdrasil
 	$(COMPOSE) --profile dind up -d --wait dind
-	$(call COMPOSE_LINKS,)
+	$(call COMPOSE_LINKS,$(TAB)@echo "  BioMate:                    http://localhost:8765")
 
 # Test flowcells ship as deploy/yggdrasil-data/test_flowcells.zip and are
 # baked into the yggdrasil image at /Illumina/NextSeq/ (see
@@ -382,7 +385,7 @@ compose-demux-test: compose-up-dind ## Run nf-core/demultiplex on a test flowcel
 # Rebuild images without any cache, then recreate the containers on the
 # fresh images. --force-recreate makes the recreation explicit even if a
 # rebuild happened to produce the same image ID.
-compose-rebuild: ## Rebuild all images without cache and recreate the stack
+compose-rebuild: ## Rebuild statusdb + yggdrasil images without cache and recreate the stack
 	$(COMPOSE) build --no-cache
 	$(COMPOSE) up -d --force-recreate
 	$(call COMPOSE_LINKS,)
@@ -390,15 +393,15 @@ compose-rebuild: ## Rebuild all images without cache and recreate the stack
 # The genomics-status app image builds on a base image that compose never
 # rebuilds itself, so the base is no-cache-rebuilt inline first (same build
 # as compose-build-gs-base, plus --no-cache).
-compose-rebuild-full: ## No-cache rebuild, plus genomics-status (profile "full")
+compose-rebuild-full: ## No-cache rebuild, plus biomate and genomics-status (profile "full")
 	docker build -q --no-cache -t dataflow-genomics-status-base:latest ./genomics-status
 	$(COMPOSE) --profile full build --no-cache
 	$(COMPOSE) --profile full up -d --force-recreate
-	$(call COMPOSE_LINKS,$(TAB)@echo "  Genomics Status:            http://localhost:9761")
+	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Teardown always passes --profile full and --profile dind so profile-gated
-# services (genomics-status, the dind sidecar) are covered no matter how the
-# stack was started; down only acts on containers that exist.
+# services (biomate, genomics-status, the dind sidecar) are covered no matter
+# how the stack was started; down only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
 	$(COMPOSE) --profile full --profile dind down --remove-orphans
 
