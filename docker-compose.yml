@@ -1,7 +1,8 @@
 # Testing environment for the Yggdrasil workflow.
 #
-#   make compose-up        # statusdb + biomate + yggdrasil
-#   make compose-up-full   # the above + genomics-status (--profile full)
+#   make compose-up        # statusdb + yggdrasil
+#   make compose-up-full   # the above + biomate + genomics-status
+#                          # (--profile full)
 #   make compose-up-dind   # yggdrasil image with Nextflow + Docker CLI,
 #                          # able to run nf-core pipelines via a docker:dind
 #                          # sidecar (profile "dind"); test with
@@ -32,6 +33,20 @@ services:
       - "5984:5984"
     volumes:
       - couchdb-data:/opt/couchdb/data
+      # Test-flowcell seeds live in deploy/seed (not in the submodule —
+      # they are only needed by this testing environment). The image's
+      # init-seed-data.sh loads every subdirectory of
+      # /opt/couchdb/seed_data as a same-named database at first boot,
+      # so these mounts are picked up automatically. Re-seeding only
+      # happens after make compose-reset (the INIT_MARKER lives on the
+      # couchdb-data volume).
+      # Deliberately not :ro — the image entrypoint chowns everything
+      # under /opt/couchdb at boot (and aborts on a read-only mount), so
+      # first boot hands ownership of the mounted files to the image's
+      # couchdb user (uid 5984); `sudo chown -R $(id -u):$(id -g)` on
+      # the two directories restores editability.
+      - ./deploy/seed/demux_sample_info:/opt/couchdb/seed_data/demux_sample_info
+      - ./deploy/seed/flowcell_status:/opt/couchdb/seed_data/flowcell_status
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5984/_up"]
       interval: 5s
@@ -46,6 +61,10 @@ services:
     build:
       context: ./BioMate
       dockerfile: Dockerfile
+    # Started only with --profile full (make compose-up-full /
+    # compose-up-dind): nothing at runtime depends on the BioMate web
+    # interface (the dmx_realm demux steps are simulated).
+    profiles: ["full"]
     command: ["biomate", "web-interface", "--host", "0.0.0.0", "--port", "8765"]
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     ports:
@@ -132,9 +151,11 @@ services:
       # (make compose-demux-test); unused by the base image.
       - ./BioMate/temp:/data/test_run:ro
     depends_on:
+      # statusdb only. biomate is profile-gated ("full") and compose
+      # rejects depends_on entries that point at profile-excluded
+      # services; nothing at runtime needs biomate anyway (the
+      # dmx_realm demux steps are simulated, not real BioMate runs).
       statusdb:
-        condition: service_healthy
-      biomate:
         condition: service_healthy
     networks:
       - yggdrasil-net

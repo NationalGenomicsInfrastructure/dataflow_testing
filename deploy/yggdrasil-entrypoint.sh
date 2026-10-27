@@ -75,7 +75,9 @@ create_db() {
 wait_for_service() {
     # Wait for an optional service on the compose network.
     # If the host does not resolve, the service is not part of this
-    # stack and the wait is skipped.
+    # stack and the wait is skipped. This is a soft gate: if the
+    # service never becomes ready, a warning is logged and the daemon
+    # is started anyway (it does not depend on the service).
     # $1 = host, $2 = port, $3 = name, $4 = timeout seconds
     local host="$1" port="$2" name="$3" timeout="${4:-300}" waited=0 resolvable=0
     # Retry DNS resolution briefly: a freshly (re)started container may need
@@ -92,12 +94,16 @@ wait_for_service() {
         return 0
     fi
     log "Waiting for ${name} at http://${host}:${port}/ (timeout ${timeout}s)..."
-    until curl -sf -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
+    # --connect-timeout/--max-time keep every probe bounded: on networks
+    # where the name resolves to an unreachable host (e.g. an org DNS
+    # entry), an unbounded curl would hang forever and the deadline
+    # below would never be reached.
+    until curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
         sleep 2
         waited=$((waited + 2))
         if [ "${waited}" -ge "${timeout}" ]; then
-            log "ERROR: ${name} did not become ready within ${timeout}s"
-            return 1
+            log "WARNING: ${name} did not become ready within ${timeout}s; continuing without it"
+            return 0
         fi
     done
     log "${name} is ready"
@@ -106,13 +112,18 @@ wait_for_service() {
 inject_scenario() {
     local id="${YGG_SCENARIO_ID:-test_scenario:compose-demo}"
     local code
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil/${id}")"
+    # The scenario doc goes into yggdrasil_testdocs: that is the DB
+    # test_realm watches (connection "yggdrasil_testdocs" in
+    # yggdrasil-config/main.json; start_seq=0). The `yggdrasil` DB is
+    # only test_realm's read/write data_access — docs written there
+    # are never seen by the watcher.
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil_testdocs/${id}")"
     if [ "${code}" = "404" ]; then
         curl -sf -X PUT "${AUTH[@]}" \
             -H 'Content-Type: application/json' \
             --data-binary @/app/scenario_seed.json \
-            "${COUCH_URL}/yggdrasil/${id}" >/dev/null
-        log "Injected test scenario '${id}' into the yggdrasil database"
+            "${COUCH_URL}/yggdrasil_testdocs/${id}" >/dev/null
+        log "Injected test scenario '${id}' into the yggdrasil_testdocs database"
     else
         log "Test scenario '${id}' already present (HTTP ${code}); skipping injection"
     fi
@@ -124,10 +135,13 @@ wait_for_http "${COUCH_URL}/_up" "CouchDB" 180
 # 2. Seeded projects database (statusdb seeds it in the background).
 wait_for_db "projects" 300
 
-# 3. Yggdrasil's own databases.
+# 3. Yggdrasil's own databases. yggdrasil_testdocs is the scenario DB:
+# test_realm's watcher (connection "yggdrasil_testdocs" in
+# yggdrasil-config/main.json) dies with a 404 if it is missing.
 create_db "yggdrasil"
 create_db "yggdrasil_plans"
 create_db "yggdrasil_ops"
+create_db "yggdrasil_testdocs"
 
 # 4. Databases watched by the dmx_realm realm (demux_realm package).
 create_db "demux_sample_info"
