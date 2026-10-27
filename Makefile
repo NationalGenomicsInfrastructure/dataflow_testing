@@ -346,7 +346,7 @@ compose-up-genomics-status: compose-build-gs-base ## genomics-status (profile "f
 # the zip-baked flowcells onto the shared /work volume
 # (/work/Illumina/NextSeq) and the resource config to
 # /work/demultiplex_local.config before the daemon starts (see
-# deploy/yggdrasil-entrypoint.sh and the DMX_* vars in docker-compose).
+# deploy/yggdrasil-entrypoint.sh and deploy/yggdrasil-config/dmx_realm.json).
 YGG_BASE_IMAGE := dataflow-yggdrasil:latest
 YGG_DIND_IMAGE ?= dataflow-yggdrasil-dind:latest
 
@@ -360,7 +360,7 @@ compose-build-yggdrasil: ## Build the base + dind-flavoured yggdrasil images
 # daemon (no /Illumina), and nested pipeline containers bind-mount the
 # flowcell dirs from ITS filesystem - so the yggdrasil entrypoint stages
 # the baked tree onto the shared /work volume at /work/Illumina/NextSeq
-# (dind-visible), the path DMX_HPC_BASE_PATH in docker-compose.yml points
+# (dind-visible), the path hpc_base_path in dmx_realm.json points
 # the realm at. compose-demux-test uses the same staged path.
 # Default flowcell; pick another with: make compose-demux-test FLOWCELL=<id>
 FLOWCELL ?= 20260310_LM43896_0386_B98QWERTY6

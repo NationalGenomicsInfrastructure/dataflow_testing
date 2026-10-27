@@ -1,0 +1,12 @@
+{
+    "hpc_base_path": "/work",
+    "nextflow": {
+        "pipeline": "nf-core/demultiplex",
+        "profile": "docker",
+        "common_config": "/work/demultiplex_local.config",
+        "work_base": "/work/nf-realm-work",
+        "outdir_base": "/work/nf-realm-results",
+        "extra_args": [],
+        "skip_tools": ["samshee"]
+    }
+}

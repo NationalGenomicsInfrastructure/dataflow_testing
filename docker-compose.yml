@@ -117,17 +117,6 @@ services:
       # (e.g. MULTIQC's assets/multiqc_config.yml) through the dind daemon.
       # Invisible paths make Nextflow stage dangling symlinks there.
       NXF_HOME: /work/nf-nxf
-      # The realm resolves the HPC runfolder path as
-      # $DMX_HPC_BASE_PATH/<destination_path>/<runfolder_id>; the statusdb
-      # seeds use destination_path /Illumina/NextSeq. In this stack the
-      # runfolders are staged onto the shared /work volume (visible to the
-      # dind sidecar) by the yggdrasil entrypoint, so the base is /work
-      # itself - see deploy/yggdrasil-entrypoint.sh.
-      DMX_HPC_BASE_PATH: /work
-      # Common Nextflow config (laptop-sized resource requirements) for the
-      # realm's pipeline runs; staged to /work by the entrypoint from the
-      # dind image's /etc/demux (see deploy/Dockerfile.yggdrasil.dind).
-      DMX_NF_CONFIG: /work/demultiplex_local.config
       PYTHONUNBUFFERED: "1"
     volumes:
       # Bind-mount the demux_realm submodule over the copy baked into the

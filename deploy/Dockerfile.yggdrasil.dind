@@ -40,7 +40,8 @@ RUN mkdir -p /opt/nextflow /opt/nf_home \
 
 # Laptop-sized resource overrides for the realm's pipeline runs. The
 # entrypoint copies it to /work/demultiplex_local.config on the shared
-# volume; compose sets DMX_NF_CONFIG to that path.
+# volume; the realm config (deploy/yggdrasil-config/dmx_realm.json,
+# nextflow.common_config) points at that path.
 RUN mkdir -p /etc/demux
 COPY deploy/nf/demultiplex_local.config /etc/demux/demultiplex_local.config
 

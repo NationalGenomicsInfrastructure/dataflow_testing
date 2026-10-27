@@ -143,7 +143,7 @@ else
 fi
 
 # 5b. Stage the development data onto the shared /work volume, at the paths
-#     the compose env points the realm at (DMX_HPC_BASE_PATH, DMX_NF_CONFIG):
+#     the realm config (dmx_realm.json: hpc_base_path, nextflow.*) points at:
 #     - the zip-baked test flowcells (/Illumina/NextSeq, present in this
 #       image) are copied to /work/Illumina/NextSeq so the dind sidecar -
 #       which mounts the same volume but not /Illumina - can serve them to
