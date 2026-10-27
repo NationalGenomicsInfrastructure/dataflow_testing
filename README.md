@@ -13,14 +13,14 @@ execution → event/ops artifacts.
   :5984 ───────────►│ statusdb      CouchDB 3.4, seeds projects/gs_users/... on first boot │
                     │        ▲                                                             │
                     │        │ http://statusdb:5984                                        │
-  :8765 ───────────►│ biomate     BioMate web interface                                    │
+  :8765 ───────────►│ biomate     BioMate web interface (only with --profile full)         │
                     │                                                                      │
   :9761 ───────────►│ genomics-status  (only with --profile full)                          │
                     │        ▲                                                             │
                     │        │ (stub config → statusdb)                                    │
                     │  ┌────────────────────────────────────────────────────────────────┐  │
                     │  │ yggdrasil daemon (yggdrasil --dev daemon)                      │  │
-                    │  │ depends_on: statusdb + biomate healthy                         │  │
+                    │  │ depends_on: statusdb healthy                                   │  │
                     │  │ entrypoint: wait CouchDB → wait seeded DBs → create ygg DBs    │  │
                     │  │            → inject test scenario → start daemon               │  │
                     │  └────────────────────────────────────────────────────────────────┘  │
@@ -30,7 +30,7 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (statusdb, biomate, yggdrasil, genomics-status)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil; profile full adds biomate + genomics-status)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
@@ -38,6 +38,8 @@ execution → event/ops artifacts.
 │   ├── seed/test_scenario_happy_path.json
 │   ├── seed/flowcell_status_biomate.json
 │   ├── seed/demux_sample_info_biomate.json
+│   ├── seed/demux_sample_info/     # test-flowcell seeds, bind-mounted into statusdb
+│   ├── seed/flowcell_status/       # test-flowcell seeds, bind-mounted into statusdb
 │   ├── Dockerfile.genomics-status   # builds on top of the submodule's conda-env image
 │   └── genomics-status/             # stub settings/credentials for the full stack
 ├── Makefile                     # submodule management + compose-* targets
@@ -50,10 +52,10 @@ execution → event/ops artifacts.
 └── Yggdrasil/                   # submodule
 ```
 
-The submodules are never modified by this repository: images are built from
-their Dockerfiles (or, for Yggdrasil, from a Dockerfile in `deploy/`), and all
-runtime configuration is baked into images rather than written into submodule
-working trees.
+At runtime the submodules are never modified by this repository: images are
+built from their Dockerfiles (or, for Yggdrasil, from a Dockerfile in
+`deploy/`), and all runtime configuration is baked into images or bind
+mounts rather than written into submodule working trees.
 
 ## Prerequisites
 
@@ -72,35 +74,36 @@ several-minute build. Subsequent builds are fast (layer caching).
 git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
-make compose-up      # build + start the stack (statusdb, biomate, dind, yggdrasil)
+make compose-up      # build + start statusdb, yggdrasil
 ```
 
 That's it. What happens automatically:
 
 1. `statusdb` starts CouchDB and (on a fresh volume) seeds the `projects`,
-   `gs_users`, `gs_configs`, `server_status` databases in the background.
-2. `biomate` serves its web interface on port 8765.
-3. `yggdrasil` starts only after `statusdb`, `biomate` **and** the `dind`
-   sidecar report healthy (`depends_on: condition: service_healthy`), then its entrypoint:
+   `gs_users`, `gs_configs`, `server_status` databases in the background —
+   plus `flowcell_status` and `demux_sample_info` with four test flowcells
+   each, from `deploy/seed/` (bind-mounted into the container; see
+   `docker-compose.yml`).
+2. `yggdrasil` starts only after `statusdb` reports healthy
+   (`depends_on: condition: service_healthy`), then its entrypoint:
    - waits until CouchDB answers `/_up` **and** the seeded `projects` DB
      exists (CouchDB being "up" is not enough — the seed runs afterwards),
-   - creates the `yggdrasil`, `yggdrasil_plans`, `yggdrasil_ops` databases
-     (Yggdrasil fails fast at startup if any of its databases are missing),
+   - creates the `yggdrasil`, `yggdrasil_plans`, `yggdrasil_ops`,
+     `yggdrasil_testdocs` databases (Yggdrasil fails fast at startup if any
+     of its databases are missing),
    - injects a `happy_path` test scenario document (skip with
      `YGG_INJECT_TEST_SCENARIO=false`),
    - starts `yggdrasil --dev daemon` (`--dev` enables the built-in
      `test_realm` used for testing).
-4. The daemon replays the changes feed from the beginning, picks up the
+3. The daemon replays the changes feed from the beginning, picks up the
    scenario, generates a plan from the `happy_path` recipe, persists it to
    `yggdrasil_plans`, executes it via the Engine, and writes `plan_status`
    documents to `yggdrasil_ops`. Step artifacts land in the `ygg-work` and
    `ygg-events` volumes.
 
-The `dind` sidecar is a plain docker daemon in a container: the yggdrasil
-image ships Nextflow and runs nf-core pipelines (e.g. `nf-core/demultiplex`)
-as nested containers through it. On Apple Silicon the amd64-only pipeline
-tool images need Docker Desktop's "Use Rosetta for x86_64 emulation".
-To run a pipeline by hand: `make compose-demux-test FLOWCELL=<id>`.
+(The `biomate` web interface on port 8765 only comes up with
+`make compose-up-full` — profile `full`; nothing in the core stack needs
+it, so it is no longer a yggdrasil dependency.)
 
 ### Verify it worked
 
@@ -135,7 +138,7 @@ UIs on the host:
 | Port | Service |
 |------|---------|
 | 5984 | CouchDB (StatusDB) — `_all_docs`, `_changes`, etc. |
-| 8765 | BioMate web interface |
+| 8765 | BioMate web interface (only in the `full` profile) |
 | 9761 | Genomics Status (only in the `full` profile) |
 
 ## Firing more work
@@ -154,9 +157,14 @@ on restarts (plans are tracked by `run_token`/`executed_run_token` and
 watcher checkpoints are persisted in CouchDB). Use `make compose-reset` for a
 completely fresh state.
 
-The demux workflow (`dmx_realm`) operates on the BioMate seed documents in
-the `flowcell_status` and `demux_sample_info` databases. Seeding those is
-opt-in (a fresh stack starts with those databases empty):
+The demux workflow (`dmx_realm`) operates on the documents in the
+`flowcell_status` and `demux_sample_info` databases. A fresh stack is
+seeded at boot with four test flowcells per database (from
+`deploy/seed/`), and any change to one of those documents fires the
+workflow. Two BioMate seed documents additionally live in
+`deploy/seed/*_biomate.json`; `compose-seed-status` PUTs them only if
+absent (idempotent) — on a fresh stack the documents already exist under
+the same `_id`s, so it is a no-op unless the docs have been removed:
 
 ```bash
 make compose-seed-status   # PUTs both seed docs; idempotent (skips if present)
@@ -186,7 +194,7 @@ replaces the existing documents and re-triggers the workflow.
 
 Scenario documents select a recipe via the `recipe` field
 (`deploy/seed/test_scenario_happy_path.json` is the template; change `recipe`
-and `PUT` to `http://localhost:5984/yggdrasil/<your-id>`):
+and `PUT` to `http://localhost:5984/yggdrasil_testdocs/<your-id>`):
 
 | Recipe | Behaviour |
 |--------|-----------|
@@ -239,13 +247,12 @@ Where things live:
   change `STACK_COUCH_*`, update `deploy/genomics-status/settings.yaml` too.
 - **Volumes**: `couchdb-data` (CouchDB, incl. seed marker and Yggdrasil
   state), `ygg-work` (plan step artifacts), `ygg-events` (event JSON spool),
-  `ygg-logs` (daemon log files), `dind-data` (nested pipeline image cache;
-  kept by `compose-reset` because re-pulling those images is slow).
+  `ygg-logs` (daemon log files).
 
 ## How it works (short version)
 
 ```
-scenario doc (type=ygg_test_scenario) in the `yggdrasil` DB
+scenario doc (type=ygg_test_scenario) in the `yggdrasil_testdocs` DB
   → WatcherManager (CouchDB changes feed, replays from start_seq=0)
   → test_realm handler generates a plan from the recipe
   → plan persisted to `yggdrasil_plans` (auto_run ⇒ approved)
@@ -296,20 +303,19 @@ by `compose-up-full`.
 
 | Target | Purpose |
 |--------|---------|
-| `make compose-up` | Build + start the stack (statusdb, biomate, dind, yggdrasil with Nextflow) |
-| `make compose-up-full` | Same, plus genomics-status (profile `full`) |
+| `make compose-up` | Build + start statusdb, yggdrasil |
+| `make compose-up-full` | Same, plus biomate and genomics-status (profile `full`) |
 | `make compose-up-statusdb` | Build + start only statusdb |
-| `make compose-up-biomate` | Build + start only biomate |
-| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its deps: statusdb, biomate, dind) |
+| `make compose-up-biomate` | Build + start only biomate (profile `full`) |
+| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its dep: statusdb) |
 | `make compose-up-genomics-status` | Build + start genomics-status (profile `full`; also starts statusdb) |
 | `make compose-build-gs-base` | Build only the genomics-status base image (conda env) |
 | `make compose-logs` | Follow yggdrasil logs |
 | `make compose-ps` | Stack status |
 | `make compose-scenario` | Inject a fresh test scenario into the running stack |
-| `make compose-seed-status` | Inject the BioMate `flowcell_status` + `demux_sample_info` seeds (opt-in, idempotent) |
+| `make compose-seed-status` | PUT the BioMate `flowcell_status` + `demux_sample_info` seed docs if absent (idempotent; a no-op on a fresh stack) |
 | `make compose-trigger` | Re-touch the seeded docs (timestamp → now) to re-fire the demux workflow; `DBS=` selects docs |
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
-| `make compose-demux-test` | Run nf-core/demultiplex on a test flowcell (`FLOWCELL=<id>`); needs `compose-up` |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 
@@ -351,7 +357,7 @@ by `compose-up-full`.
 
 | Submodule | Upstream | Role in the stack |
 |-----------|----------|-------------------|
-| `StatusDB_NGI` | [NationalGenomicsInfrastructure/StatusDB_NGI](https://github.com/NationalGenomicsInfrastructure/StatusDB_NGI) | CouchDB image + seed data (`statusdb`) |
+| `StatusDB_NGI` | [NationalGenomicsInfrastructure/StatusDB_NGI](https://github.com/NationalGenomicsInfrastructure/StatusDB_NGI) | CouchDB image + core seed data (`statusdb`); the test-flowcell seeds for `flowcell_status` / `demux_sample_info` live in this repo's `deploy/seed/` and are bind-mounted in |
 | `Yggdrasil` | [NationalGenomicsInfrastructure/Yggdrasil](https://github.com/NationalGenomicsInfrastructure/Yggdrasil) | The orchestration daemon under test |
 | `demux_realm` | [NationalGenomicsInfrastructure/demux_realm](https://github.com/NationalGenomicsInfrastructure/demux_realm) | Yggdrasil realm for demux planning; installed into the Yggdrasil image as realm `dmx_realm` (`--no-deps`), watches the `demux_sample_info` + `flowcell_status` DBs (bootstrapped by the yggdrasil entrypoint). **Requires the Yggdrasil `dev` branch** (handler API `generate_plan_drafts`) |
 | `BioMate` | [NationalGenomicsInfrastructure/BioMate](https://github.com/NationalGenomicsInfrastructure/BioMate) | Bio-data tooling + web interface (`biomate`) |
