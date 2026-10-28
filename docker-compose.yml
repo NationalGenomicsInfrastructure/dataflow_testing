@@ -143,6 +143,11 @@ services:
       # Ensure Nextflow is in PATH (it should be set by the image, but
       # explicitly add it here to be safe)
       PATH: /opt/nextflow:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Nextflow configuration for demultiplexing
+      DMX_NF_CONFIG: /work/demultiplex_local.config
+      DMX_HPC_BASE_PATH: /work
+      NXF_VER: 26.10.0
+      NXF_OPTS: -Ddocker.run.args='--platform linux/amd64'
     volumes:
       # Bind-mount the demux_realm submodule over the copy baked into the
       # image (editable-installed at /app/demux_realm) so local edits are
