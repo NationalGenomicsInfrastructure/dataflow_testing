@@ -293,3 +293,29 @@ compose-inject: ## Inject fresh generated flowcells into a running stack (COUNT=
 		--template-flowcell-id "$${f_id}" \
 		--template-demux-id "$${d_id}" \
 		$$extra
+# Mark a seeded flowcell as fully synced to trigger demux workflow
+FLOWCELL_ID ?= A12GGASZR5
+compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding transferred_to_hpc event
+	@file="deploy/seed/flowcell_status/flowcell_status_$${FLOWCELL_ID}.json"; \
+	if [ ! -f "$$file" ]; then \
+		echo "error: flowcell config file '$$file' not found"; \
+		exit 1; \
+	fi; \
+	id=$$(python3 -c "import json; print(json.load(open('$$file'))['_id'])"); \
+	code=$$(curl -s -o /dev/null -w '%{http_code}' \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		"http://localhost:5984/flowcell_status/$${id}"); \
+	if [ "$${code}" = "404" ]; then \
+		echo "error: flowcell_status doc '$${id}' not found (HTTP 404) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+	else \
+		now=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+		body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/flowcell_status/$${id}" | \
+			python3 deploy/seed/add_transferred_event.py "$${now}") && \
+		curl -sf -X PUT \
+			-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+			-H 'Content-Type: application/json' \
+			--data-binary "$${body}" \
+			"http://localhost:5984/flowcell_status/$${id}" >/dev/null && \
+		echo "Finalized flowcell doc '$${id}' (added transferred_to_hpc event at $${now}) for flowcell $${FLOWCELL_ID}"; \
+	fi
+	@echo "Watch the workflow with: make compose-logs"
