@@ -128,7 +128,7 @@ extract-deps:
 # Compose targets
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= docker-compose.yml
-COMPOSE_PROJECT_NAME ?= dataflow
+COMPOSE_PROJECT_NAME ?= dataflow-testing
 
 # Profiles for compose-up-full (biomate, genomics-status, dind)
 FULL_LINKS := full dind
