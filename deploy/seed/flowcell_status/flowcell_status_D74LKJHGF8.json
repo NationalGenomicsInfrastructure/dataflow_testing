@@ -140,11 +140,6 @@
         "command": "/home/john_doe/repos/run-one/run-one rsync -au --log-file=/srv/seqdata/sequencing/NextSeq/Runs/20260310_LM43898_0388_D74LKJHGF8/rsync_remote_log.txt --chown=:grp_a058 --chmod=Dg+s,g+rw --exclude=Demultiplex* --exclude=demux* --exclude=rsync* --exclude=SampleSheet* /srv/seqdata/sequencing/NextSeq/Runs/20260310_LM43898_0388_D74LKJHGF8 user_37f4@hpc-86.example.internal:/Illumina/NextSeq; echo $? > /srv/seqdata/sequencing/NextSeq/Runs/20260310_LM43898_0388_D74LKJHGF8/.final_rsync_exitcode",
         "destination_path": "/Illumina/NextSeq"
       }
-    },
-    {
-      "event_type": "transferred_to_hpc",
-      "timestamp": "2026-03-10T16:00:00Z",
-      "data": {}
     }
   ]
 }

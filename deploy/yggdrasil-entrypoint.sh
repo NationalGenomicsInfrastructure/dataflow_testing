@@ -11,7 +11,12 @@
 #   2. the seeded `projects` database exists
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
+#   4b. the daemon's configuration files exist under /app (main.json is
+#       fatal; a missing dmx_realm.json is a loud warning, since the realm
+#       would otherwise fall back to its built-in defaults silently)
 #   5. (optional) a test scenario document is injected into the stack
+#   5b. (dev data) the zip-baked flowcells are staged onto the shared
+#       /work volume where the dind sidecar can see them
 #   6. (optional) genomics-status is reachable, when it is part of this stack
 #
 # It then hands over to the requested yggdrasil command (default: `--dev daemon`).
@@ -129,6 +134,21 @@ inject_scenario() {
     fi
 }
 
+verify_configs() {
+    # main.json is fatal: without it the daemon has no CouchDB connections
+    # at all. dmx_realm.json is not fatal: dmx_realm falls back to built-in
+    # defaults when it is missing (work_base=/work/nf-realm-work, no -c
+    # common_config, no skip_tools) - make that loud instead of silent.
+    local cfg_dir="/app/yggdrasil_workspace/common/configurations"
+    if [ ! -f "${cfg_dir}/main.json" ]; then
+        log "ERROR: ${cfg_dir}/main.json is missing; the daemon cannot run without it"
+        return 1
+    fi
+    if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
+        log "WARNING: ${cfg_dir}/dmx_realm.json is missing; dmx_realm will run with built-in defaults (work_base=/work/nf-realm-work, no -c common_config, no skip_tools). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+    fi
+}
+
 # 1. CouchDB must be up.
 wait_for_http "${COUCH_URL}/_up" "CouchDB" 180
 
@@ -147,12 +167,39 @@ create_db "yggdrasil_testdocs"
 create_db "demux_sample_info"
 create_db "flowcell_status"
 
+# 4b. Configuration files must be in place (see verify_configs).
+verify_configs
+
 # 5. Optional test scenario.
 if [ "${YGG_INJECT_TEST_SCENARIO:-true}" = "true" ]; then
     inject_scenario
 else
     log "YGG_INJECT_TEST_SCENARIO=false; not injecting a test scenario"
 fi
+
+# 5b. Stage the development data onto the shared /work volume, at the paths
+#     the realm config (dmx_realm.json: hpc_base_path, nextflow.*) points at:
+#     - the zip-baked test flowcells (/Illumina/NextSeq, present in this
+#       image) are copied to /work/Illumina/NextSeq so the dind sidecar -
+#       which mounts the same volume but not /Illumina - can serve them to
+#       the nested pipeline containers;
+#     - the dind image ships the local Nextflow resource config at
+#       /etc/demux (the base image does not; nothing to do in that case).
+#     Both copies are no-clobber and re-run on every (re)start, so they
+#     finish before the daemon can plan anything.
+stage_dev_data() {
+    if [ -d /Illumina/NextSeq ] && [ -d /work ]; then
+        log "Staging test flowcells: /Illumina/NextSeq -> /work/Illumina/NextSeq"
+        mkdir -p /work/Illumina/NextSeq
+        cp -rn /Illumina/NextSeq/. /work/Illumina/NextSeq/
+    fi
+    if [ -f /etc/demux/demultiplex_local.config ] && [ ! -e /work/demultiplex_local.config ]; then
+        log "Staging Nextflow resource config to /work/demultiplex_local.config"
+        cp /etc/demux/demultiplex_local.config /work/demultiplex_local.config
+    fi
+}
+
+stage_dev_data
 
 # 6. Optional UI service (only present with --profile full).
 wait_for_service "genomics-status" 9761 "genomics-status" 300
