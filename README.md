@@ -171,7 +171,7 @@ make compose-seed-status   # PUTs both seed docs; idempotent (skips if present)
 ```
 
 The seeded run triggers the demux workflow once. Any new revision of either
-document re-triggers it, which the two recipes below exploit:
+document re-triggers it, which the recipes below exploit:
 
 ```bash
 make compose-trigger                        # re-touch both docs (repeatable)
@@ -180,6 +180,9 @@ make compose-inject                         # +1 random flowcell (fresh ids)
 make compose-inject COUNT=3 LANES=4         # 3 flowcells, 4 lanes each
 make compose-inject DIR=BioMate/temp        # docs built from that run folder's
                                             # SampleSheet.csv (upserted by flowcell_id)
+make compose-hold                           # seed docs but hold demux (no transferred_to_hpc)
+make compose-sync-flowcell                       # add transferred_to_hpc to trigger demux
+make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6  # specify which flowcell to finalize
 ```
 
 `compose-inject` generates the documents on the fly from the *live* docs in
@@ -189,6 +192,11 @@ rebases all timestamps to now; `DIR=` mode takes a real run folder (or a
 directory containing one), so the injected documents carry that run's actual
 samplesheet content instead of random data. Re-injecting the same run folder
 replaces the existing documents and re-triggers the workflow.
+
+`compose-hold` seeds all flowcell documents but omits the `transferred_to_hpc`
+event, preventing the demux workflow from starting. Use `compose-sync-flowcell`
+(with optional FLOWCELL_ID parameter) to add the event and trigger the workflow
+for a specific flowcell. The default flowcell ID is A12GGASZR5.
 
 ### Test recipes
 
@@ -316,6 +324,9 @@ by `compose-up-full`.
 | `make compose-seed-status` | PUT the BioMate `flowcell_status` + `demux_sample_info` seed docs if absent (idempotent; a no-op on a fresh stack) |
 | `make compose-trigger` | Re-touch the seeded docs (timestamp → now) to re-fire the demux workflow; `DBS=` selects docs |
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
+| `make compose-hold` | Seed all flowcell docs but omit `transferred_to_hpc` event to hold demux workflow |
+| `make compose-sync-flowcell` | Add `transferred_to_hpc` event to trigger demux workflow for held flowcell (default: A12GGASZR5) |
+| `make compose-sync-flowcell FLOWCELL_ID=<id>` | Specify which flowcell to finalize (e.g., B98QWERTY6, C36MNBVCX7, D74LKJHGF8) |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 

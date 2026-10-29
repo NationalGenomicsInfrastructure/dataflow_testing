@@ -1,10 +1,9 @@
-# Alternative yggdrasil image for running nf-core pipelines (e.g.
-# nf-core/demultiplex) inside the compose stack: adds a JVM, a pinned
-# Nextflow launcher and a static Docker CLI client that talks to the
-# compose "dind" sidecar (docker:dind, profile "dind"), so pipelines can
-# run with -profile docker (docker-in-docker).
+# The yggdrasil image for the compose stack: the base image plus a JVM, a
+# pinned Nextflow launcher and a static Docker CLI client that talks to
+# the compose "dind" sidecar (docker:dind), so nf-core pipelines (e.g.
+# nf-core/demultiplex) can run with -profile docker (docker-in-docker).
 #
-# Build order (see Makefile target `compose-up-dind`):
+# Build order (see Makefile target `compose-build-yggdrasil`):
 #   docker build -f deploy/Dockerfile.yggdrasil      -t dataflow-yggdrasil:latest       .
 #   docker build -f deploy/Dockerfile.yggdrasil.dind -t dataflow-yggdrasil-dind:latest  .
 
@@ -38,6 +37,13 @@ RUN mkdir -p /opt/nextflow /opt/nf_home \
         "https://github.com/nextflow-io/nextflow/releases/download/v${NEXTFLOW_VERSION}/nextflow" \
     && chmod +x /opt/nextflow/nextflow \
     && nextflow -version
+
+# Laptop-sized resource overrides for the realm's pipeline runs. The
+# entrypoint copies it to /work/demultiplex_local.config on the shared
+# volume; the realm config (deploy/yggdrasil-config/dmx_realm.json,
+# nextflow.common_config) points at that path.
+RUN mkdir -p /etc/demux
+COPY deploy/nf/demultiplex_local.config /etc/demux/demultiplex_local.config
 
 # Blocks until the DinD daemon answers (call before the first pipeline run).
 RUN printf '%s\n' \

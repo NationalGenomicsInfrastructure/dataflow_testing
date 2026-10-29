@@ -116,13 +116,14 @@ services:
       - yggdrasil-net
 
   yggdrasil:
-    # Overridable so the same service can run the base image or the
-    # dind-flavoured one (Nextflow + Docker CLI; see
-    # deploy/Dockerfile.yggdrasil.dind, Makefile target compose-up-dind).
-    image: ${YGG_IMAGE:-dataflow-yggdrasil:latest}
-    build:
-      context: .
-      dockerfile: ${YGG_DOCKERFILE:-deploy/Dockerfile.yggdrasil}
+    # The dind-flavoured image (Nextflow + Docker CLI; see
+    # deploy/Dockerfile.yggdrasil.dind). Both yggdrasil images are built
+    # explicitly by the Makefile (target compose-build-yggdrasil), not by
+    # compose: the dind image is layered on the base image, and compose
+    # can't express that dependency between one service's build and its
+    # runtime image. Plain `docker compose up` therefore assumes the
+    # images exist - use `make compose-up`.
+    image: dataflow-yggdrasil-dind:latest
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
       YGG_COUCH_PASS: ${STACK_COUCH_PASSWORD:-secret}
@@ -139,16 +140,31 @@ services:
       # Invisible paths make Nextflow stage dangling symlinks there.
       NXF_HOME: /work/nf-nxf
       PYTHONUNBUFFERED: "1"
+      # Ensure Nextflow is in PATH (it should be set by the image, but
+      # explicitly add it here to be safe)
+      PATH: /opt/nextflow:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Nextflow configuration for demultiplexing
+      DMX_NF_CONFIG: /work/demultiplex_local.config
+      DMX_HPC_BASE_PATH: /work
+      NXF_VER: 26.10.0
+      NXF_OPTS: -Ddocker.run.args='--platform linux/amd64'
     volumes:
       # Bind-mount the demux_realm submodule over the copy baked into the
       # image (editable-installed at /app/demux_realm) so local edits are
       # picked up on container (re)start without rebuilding the image.
       - ./demux_realm:/app/demux_realm
+      # Same pattern for the configuration directory: host edits to
+      # main.json / dmx_realm.json are picked up on container (re)start
+      # without rebuilding the image. :ro — the daemon only reads from
+      # here. The image-baked copy remains as fallback for image-only
+      # deployments. (The daemon caches configs per process, so a
+      # container restart is still required to see host edits.)
+      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations:ro
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
       # Tiny Illumina BCL run for nf-core/demultiplex test runs
-      # (make compose-demux-test); unused by the base image.
+      # (make compose-demux-test).
       - ./BioMate/temp:/data/test_run:ro
     depends_on:
       # statusdb only. biomate is profile-gated ("full") and compose
@@ -156,6 +172,10 @@ services:
       # services; nothing at runtime needs biomate anyway (the
       # dmx_realm demux steps are simulated, not real BioMate runs).
       statusdb:
+        condition: service_healthy
+      # Awaited: the daemon and the realm talk to the dind daemon via
+      # DOCKER_HOST=tcp://dind:2375 (baked into the dind image).
+      dind:
         condition: service_healthy
     networks:
       - yggdrasil-net
@@ -166,10 +186,9 @@ services:
   # amd64-only pipeline tool images (e.g. samshee, bcl-convert) run as
   # leaf containers translated by Rosetta — requires Docker Desktop's
   # "Use Rosetta for x86_64 emulation" to be enabled.
-  # Only started when the "dind" profile is active (compose-up-dind).
+  # Part of the default stack (yggdrasil depends on it).
   dind:
     image: docker:27-dind
-    profiles: ["dind"]
     privileged: true
     # Expose the daemon on 0.0.0.0:2375 (plain TCP; TLS is disabled via
     # DOCKER_TLS_CERTDIR="") so the yggdrasil container can reach it at
