@@ -25,6 +25,8 @@ help: ## Show this help
 	@echo "  compose-up-biomate        Build and start only biomate (profile full)"
 	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its dep: statusdb)"
 	@echo "  compose-up-genomics-status  Build and start genomics-status (profile full)"
+	@echo "  compose-build-yggdrasil   Build the base + dind-flavoured yggdrasil images"
+	@echo "  compose-build-gs-base     Build the genomics-status base image (conda env)"
 	@echo "  compose-rebuild           Rebuild statusdb + yggdrasil images without cache; recreate the stack"
 	@echo "  compose-rebuild-full      Same, plus biomate and genomics-status (profile full)"
 	@echo "  compose-down              Stop and remove the stack (volumes are kept)"
@@ -146,12 +148,39 @@ ifeq ($(COMPOSE_LINKS),full)
 $(COMPOSE): COMPOSE_PROFILES := $(FULL_LINKS)
 endif
 
+# The yggdrasil service runs the dind-flavoured image
+# (deploy/Dockerfile.yggdrasil.dind), layered ON TOP of the base image
+# (deploy/Dockerfile.yggdrasil). Compose can't express that dependency
+# between two builds, so the Makefile builds both explicitly (the compose
+# file references the resulting image names only). Both builds are cheap
+# when nothing changed (layer caching), so they run as a prerequisite of
+# every up target that starts yggdrasil.
+YGG_BASE_IMAGE := dataflow-yggdrasil:latest
+YGG_DIND_IMAGE := dataflow-yggdrasil-dind:latest
+
+YGG_NO_CACHE ?=
+
+compose-build-yggdrasil: ## Build the base + dind-flavoured yggdrasil images
+	docker build -q $(YGG_NO_CACHE) -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
+	docker build -q $(YGG_NO_CACHE) -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
+
+# The genomics-status service (profile "full") builds from
+# deploy/Dockerfile.genomics-status, which is layered ON TOP of
+# dataflow-genomics-status-base:latest (the conda/pip environment image,
+# built from the genomics-status submodule's own Dockerfile). Compose
+# never builds that base itself, so this target does; it is a prerequisite
+# of the up targets that build/start genomics-status.
+GS_BASE_IMAGE := dataflow-genomics-status-base:latest
+
+compose-build-gs-base: ## Build the genomics-status base image (conda env)
+	docker build -q -t $(GS_BASE_IMAGE) ./genomics-status
+
 # Build and start the stack (statusdb + yggdrasil)
-compose-up: ## Build and start the stack (statusdb, yggdrasil)
+compose-up: compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil)
 	$(COMPOSE) up -d
 
 # Build and start the full stack (with biomate + genomics-status)
-compose-up-full: ## Build and start the stack (statusdb, yggdrasil, biomate, genomics-status)
+compose-up-full: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, biomate, genomics-status)
 	$(COMPOSE) --profile full up -d
 
 # Build and start only statusdb
@@ -163,20 +192,29 @@ compose-up-biomate: ## Build and start only biomate (profile full)
 	$(COMPOSE) --profile full up -d biomate
 
 # Build and start only yggdrasil (plus its dep: statusdb)
-compose-up-yggdrasil: ## Build and start yggdrasil (plus its dep: statusdb)
+compose-up-yggdrasil: compose-build-yggdrasil ## Build and start yggdrasil (plus its dep: statusdb)
 	$(COMPOSE) up -d yggdrasil
 
 # Build and start only genomics-status (profile full)
-compose-up-genomics-status: ## Build and start genomics-status (profile full)
+compose-up-genomics-status: compose-build-gs-base ## Build and start genomics-status (profile full)
 	$(COMPOSE) --profile full up -d genomics-status
 
-# Rebuild images without cache and recreate the stack
+# Rebuild images without cache and recreate the stack. The yggdrasil
+# images are built outside compose (see compose-build-yggdrasil), so they
+# get the same --no-cache treatment via YGG_NO_CACHE.
 compose-rebuild: ## Rebuild statusdb + yggdrasil images without cache; recreate the stack
-	$(COMPOSE) build --no-cache && $(COMPOSE) up -d --force-recreate
+	$(COMPOSE) build --no-cache
+	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
+	$(COMPOSE) up -d --force-recreate
 
-# Rebuild full stack images without cache and recreate
+# Rebuild full stack images without cache and recreate. The genomics-status
+# base image is no-cache-rebuilt inline first, as compose never builds it
+# (same build as compose-build-gs-base, plus --no-cache).
 compose-rebuild-full: ## Rebuild all images without cache; recreate the stack (profile full)
-	$(COMPOSE) --profile full build --no-cache && $(COMPOSE) --profile full up -d --force-recreate
+	docker build -q --no-cache -t $(GS_BASE_IMAGE) ./genomics-status
+	$(COMPOSE) --profile full build --no-cache
+	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
+	$(COMPOSE) --profile full up -d --force-recreate
 
 # Teardown always passes --profile full and --profile dind so profile-gated
 # services (biomate, genomics-status, the dind sidecar) are covered no matter

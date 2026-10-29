@@ -11,6 +11,9 @@
 #   2. the seeded `projects` database exists
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
+#   4b. the daemon's configuration files exist under /app (main.json is
+#       fatal; a missing dmx_realm.json is a loud warning, since the realm
+#       would otherwise fall back to its built-in defaults silently)
 #   5. (optional) a test scenario document is injected into the stack
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
 #       /work volume where the dind sidecar can see them
@@ -131,6 +134,21 @@ inject_scenario() {
     fi
 }
 
+verify_configs() {
+    # main.json is fatal: without it the daemon has no CouchDB connections
+    # at all. dmx_realm.json is not fatal: dmx_realm falls back to built-in
+    # defaults when it is missing (work_base=/work/nf-realm-work, no -c
+    # common_config, no skip_tools) - make that loud instead of silent.
+    local cfg_dir="/app/yggdrasil_workspace/common/configurations"
+    if [ ! -f "${cfg_dir}/main.json" ]; then
+        log "ERROR: ${cfg_dir}/main.json is missing; the daemon cannot run without it"
+        return 1
+    fi
+    if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
+        log "WARNING: ${cfg_dir}/dmx_realm.json is missing; dmx_realm will run with built-in defaults (work_base=/work/nf-realm-work, no -c common_config, no skip_tools). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+    fi
+}
+
 # 1. CouchDB must be up.
 wait_for_http "${COUCH_URL}/_up" "CouchDB" 180
 
@@ -148,6 +166,9 @@ create_db "yggdrasil_testdocs"
 # 4. Databases watched by the dmx_realm realm (demux_realm package).
 create_db "demux_sample_info"
 create_db "flowcell_status"
+
+# 4b. Configuration files must be in place (see verify_configs).
+verify_configs
 
 # 5. Optional test scenario.
 if [ "${YGG_INJECT_TEST_SCENARIO:-true}" = "true" ]; then

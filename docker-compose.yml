@@ -153,6 +153,13 @@ services:
       # image (editable-installed at /app/demux_realm) so local edits are
       # picked up on container (re)start without rebuilding the image.
       - ./demux_realm:/app/demux_realm
+      # Same pattern for the configuration directory: host edits to
+      # main.json / dmx_realm.json are picked up on container (re)start
+      # without rebuilding the image. :ro — the daemon only reads from
+      # here. The image-baked copy remains as fallback for image-only
+      # deployments. (The daemon caches configs per process, so a
+      # container restart is still required to see host edits.)
+      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations:ro
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
