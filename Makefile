@@ -3,6 +3,15 @@
 # Submodule directories (extracted from .gitmodules)
 SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
 
+# Command-like targets: force make to always run them, even if a file
+# or directory with the same name exists.
+.PHONY: help init init-% init-target deinit deinit-all deinit-% deinit-target \
+        update-all update-% status status-% sync reset use-dev use-main extract-deps \
+        compose-build-yggdrasil compose-build-gs-base compose-up compose-up-full \
+        compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
+        compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
+        compose-scenario compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
@@ -56,13 +65,13 @@ init-%:
 init-target:
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($(git submodule status "$$sub" | cut -c1))" = "-" ]; then \
-			$(git submodule init "$$sub" && git submodule update "$$sub") || exit 1; \
+		if [ "$$($$(git submodule status "$$sub" | cut -c1))" = "-" ]; then \
+			git submodule init "$$sub" && git submodule update "$$sub" || exit 1; \
 		else \
 			echo "$$sub already initialized"; \
 		fi \
 	else \
-		$(git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub") || exit 1; \
+		git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub" || exit 1; \
 	fi
 
 deinit:
@@ -81,8 +90,8 @@ deinit-%:
 deinit-target:
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($(git submodule status "$$sub" | cut -c1))" != "-" ]; then \
-			$(git submodule deinit -f "$$sub" && git rm -f "$$sub" && rm -rf .git/modules/$$sub) || exit 1; \
+		if [ "$$($$(git submodule status "$$sub" | cut -c1))" != "-" ]; then \
+			git submodule deinit -f "$$sub" && git rm -f "$$sub" && rm -rf .git/modules/$$sub || exit 1; \
 		else \
 			rm -rf "$$sub"; \
 		fi \
@@ -91,38 +100,38 @@ deinit-target:
 	fi
 
 update-all:
-	@$(git submodule update --remote)
+	@git submodule update --remote
 
 update-%:
-	@$(git submodule update --remote "$(SUBMODULE)")
+	@git submodule update --remote "$(SUBMODULE)"
 
 status:
-	@$(git submodule status --recursive)
+	@git submodule status --recursive
 
 status-%:
-	@$(git submodule status "$(SUBMODULE)")
+	@git submodule status "$(SUBMODULE)"
 
 sync:
-	@$(git submodule sync --recursive)
+	@git submodule sync --recursive
 
 reset:
-	@$(git submodule foreach --recursive 'git reset --hard')
+	@git submodule foreach --recursive 'git reset --hard'
 
 use-dev:
-	@$(git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
+	@git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
 		if [ "$$branch" = "dev" ]; then \
 			git checkout dev && git pull; \
 		else \
 			git checkout $$branch; \
-		fi')
+		fi'
 
 use-main:
-	@$(git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
+	@git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
 		if [ "$$branch" = "main" ] || [ "$$branch" = "master" ]; then \
 			if [ "$$branch" = "main" ]; then git checkout main; else git checkout master; fi && git pull; \
 		else \
 			git checkout $$branch; \
-		fi')
+		fi'
 
 extract-deps:
 	@python3 extract_deps.py
