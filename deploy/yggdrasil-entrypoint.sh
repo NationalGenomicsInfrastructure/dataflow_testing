@@ -11,7 +11,12 @@
 #   2. the seeded `projects` database exists
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
+#   4b. the daemon's configuration files exist under /app (main.json is
+#       fatal; a missing dmx_realm.json is a loud warning, since the realm
+#       would otherwise fall back to its built-in defaults silently)
 #   5. (optional) a test scenario document is injected into the stack
+#   5b. (dev data) the zip-baked flowcells are staged onto the shared
+#       /work volume where the dind sidecar can see them
 #   6. (optional) genomics-status is reachable, when it is part of this stack
 #
 # It then hands over to the requested yggdrasil command (default: `--dev daemon`).
@@ -75,7 +80,9 @@ create_db() {
 wait_for_service() {
     # Wait for an optional service on the compose network.
     # If the host does not resolve, the service is not part of this
-    # stack and the wait is skipped.
+    # stack and the wait is skipped. This is a soft gate: if the
+    # service never becomes ready, a warning is logged and the daemon
+    # is started anyway (it does not depend on the service).
     # $1 = host, $2 = port, $3 = name, $4 = timeout seconds
     local host="$1" port="$2" name="$3" timeout="${4:-300}" waited=0 resolvable=0
     # Retry DNS resolution briefly: a freshly (re)started container may need
@@ -92,12 +99,16 @@ wait_for_service() {
         return 0
     fi
     log "Waiting for ${name} at http://${host}:${port}/ (timeout ${timeout}s)..."
-    until curl -sf -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
+    # --connect-timeout/--max-time keep every probe bounded: on networks
+    # where the name resolves to an unreachable host (e.g. an org DNS
+    # entry), an unbounded curl would hang forever and the deadline
+    # below would never be reached.
+    until curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "http://${host}:${port}/" 2>/dev/null; do
         sleep 2
         waited=$((waited + 2))
         if [ "${waited}" -ge "${timeout}" ]; then
-            log "ERROR: ${name} did not become ready within ${timeout}s"
-            return 1
+            log "WARNING: ${name} did not become ready within ${timeout}s; continuing without it"
+            return 0
         fi
     done
     log "${name} is ready"
@@ -106,15 +117,35 @@ wait_for_service() {
 inject_scenario() {
     local id="${YGG_SCENARIO_ID:-test_scenario:compose-demo}"
     local code
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil/${id}")"
+    # The scenario doc goes into yggdrasil_testdocs: that is the DB
+    # test_realm watches (connection "yggdrasil_testdocs" in
+    # yggdrasil-config/main.json; start_seq=0). The `yggdrasil` DB is
+    # only test_realm's read/write data_access — docs written there
+    # are never seen by the watcher.
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${COUCH_URL}/yggdrasil_testdocs/${id}")"
     if [ "${code}" = "404" ]; then
         curl -sf -X PUT "${AUTH[@]}" \
             -H 'Content-Type: application/json' \
             --data-binary @/app/scenario_seed.json \
-            "${COUCH_URL}/yggdrasil/${id}" >/dev/null
-        log "Injected test scenario '${id}' into the yggdrasil database"
+            "${COUCH_URL}/yggdrasil_testdocs/${id}" >/dev/null
+        log "Injected test scenario '${id}' into the yggdrasil_testdocs database"
     else
         log "Test scenario '${id}' already present (HTTP ${code}); skipping injection"
+    fi
+}
+
+verify_configs() {
+    # main.json is fatal: without it the daemon has no CouchDB connections
+    # at all. dmx_realm.json is not fatal: dmx_realm falls back to built-in
+    # defaults when it is missing (work_base=/work/nf-realm-work, no -c
+    # common_config, no skip_tools) - make that loud instead of silent.
+    local cfg_dir="/app/yggdrasil_workspace/common/configurations"
+    if [ ! -f "${cfg_dir}/main.json" ]; then
+        log "ERROR: ${cfg_dir}/main.json is missing; the daemon cannot run without it"
+        return 1
+    fi
+    if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
+        log "WARNING: ${cfg_dir}/dmx_realm.json is missing; dmx_realm will run with built-in defaults (work_base=/work/nf-realm-work, no -c common_config, no skip_tools). Rebuild the image (make compose-build-yggdrasil) or restore the file."
     fi
 }
 
@@ -124,14 +155,20 @@ wait_for_http "${COUCH_URL}/_up" "CouchDB" 180
 # 2. Seeded projects database (statusdb seeds it in the background).
 wait_for_db "projects" 300
 
-# 3. Yggdrasil's own databases.
+# 3. Yggdrasil's own databases. yggdrasil_testdocs is the scenario DB:
+# test_realm's watcher (connection "yggdrasil_testdocs" in
+# yggdrasil-config/main.json) dies with a 404 if it is missing.
 create_db "yggdrasil"
 create_db "yggdrasil_plans"
 create_db "yggdrasil_ops"
+create_db "yggdrasil_testdocs"
 
 # 4. Databases watched by the dmx_realm realm (demux_realm package).
 create_db "demux_sample_info"
 create_db "flowcell_status"
+
+# 4b. Configuration files must be in place (see verify_configs).
+verify_configs
 
 # 5. Optional test scenario.
 if [ "${YGG_INJECT_TEST_SCENARIO:-true}" = "true" ]; then
@@ -139,6 +176,30 @@ if [ "${YGG_INJECT_TEST_SCENARIO:-true}" = "true" ]; then
 else
     log "YGG_INJECT_TEST_SCENARIO=false; not injecting a test scenario"
 fi
+
+# 5b. Stage the development data onto the shared /work volume, at the paths
+#     the realm config (dmx_realm.json: hpc_base_path, nextflow.*) points at:
+#     - the zip-baked test flowcells (/Illumina/NextSeq, present in this
+#       image) are copied to /work/Illumina/NextSeq so the dind sidecar -
+#       which mounts the same volume but not /Illumina - can serve them to
+#       the nested pipeline containers;
+#     - the dind image ships the local Nextflow resource config at
+#       /etc/demux (the base image does not; nothing to do in that case).
+#     Both copies are no-clobber and re-run on every (re)start, so they
+#     finish before the daemon can plan anything.
+stage_dev_data() {
+    if [ -d /Illumina/NextSeq ] && [ -d /work ]; then
+        log "Staging test flowcells: /Illumina/NextSeq -> /work/Illumina/NextSeq"
+        mkdir -p /work/Illumina/NextSeq
+        cp -rn /Illumina/NextSeq/. /work/Illumina/NextSeq/
+    fi
+    if [ -f /etc/demux/demultiplex_local.config ] && [ ! -e /work/demultiplex_local.config ]; then
+        log "Staging Nextflow resource config to /work/demultiplex_local.config"
+        cp /etc/demux/demultiplex_local.config /work/demultiplex_local.config
+    fi
+}
+
+stage_dev_data
 
 # 6. Optional UI service (only present with --profile full).
 wait_for_service "genomics-status" 9761 "genomics-status" 300
