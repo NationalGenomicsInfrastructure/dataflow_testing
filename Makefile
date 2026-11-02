@@ -3,6 +3,15 @@
 # Submodule directories (extracted from .gitmodules)
 SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
 
+# Command-like targets: force make to always run them, even if a file
+# or directory with the same name exists.
+.PHONY: help init init-% init-target deinit deinit-all deinit-% deinit-target \
+        update-all update-% status status-% sync reset use-dev use-main extract-deps \
+        compose-build-yggdrasil compose-build-gs-base compose-up compose-up-full \
+        compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
+        compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
+        compose-scenario compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
@@ -33,9 +42,12 @@ help: ## Show this help
 	@echo "  compose-logs              Follow yggdrasil logs"
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
+	@echo "  compose-reset-statusdb    Reset CouchDB while Yggdrasil is paused; preserve files (CONFIRM=1)"
+	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and resume it (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
+	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
 	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
@@ -56,13 +68,13 @@ init-%:
 init-target:
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($(git submodule status "$$sub" | cut -c1))" = "-" ]; then \
-			$(git submodule init "$$sub" && git submodule update "$$sub") || exit 1; \
+		if [ "$$($$(git submodule status "$$sub" | cut -c1))" = "-" ]; then \
+			git submodule init "$$sub" && git submodule update "$$sub" || exit 1; \
 		else \
 			echo "$$sub already initialized"; \
 		fi \
 	else \
-		$(git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub") || exit 1; \
+		git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub" || exit 1; \
 	fi
 
 deinit:
@@ -81,8 +93,8 @@ deinit-%:
 deinit-target:
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($(git submodule status "$$sub" | cut -c1))" != "-" ]; then \
-			$(git submodule deinit -f "$$sub" && git rm -f "$$sub" && rm -rf .git/modules/$$sub) || exit 1; \
+		if [ "$$($$(git submodule status "$$sub" | cut -c1))" != "-" ]; then \
+			git submodule deinit -f "$$sub" && git rm -f "$$sub" && rm -rf .git/modules/$$sub || exit 1; \
 		else \
 			rm -rf "$$sub"; \
 		fi \
@@ -91,61 +103,121 @@ deinit-target:
 	fi
 
 update-all:
-	@$(git submodule update --remote)
+	@git submodule update --remote
 
 update-%:
-	@$(git submodule update --remote "$(SUBMODULE)")
+	@git submodule update --remote "$(SUBMODULE)"
 
 status:
-	@$(git submodule status --recursive)
+	@git submodule status --recursive
 
 status-%:
-	@$(git submodule status "$(SUBMODULE)")
+	@git submodule status "$(SUBMODULE)"
 
 sync:
-	@$(git submodule sync --recursive)
+	@git submodule sync --recursive
 
 reset:
-	@$(git submodule foreach --recursive 'git reset --hard')
+	@git submodule foreach --recursive 'git reset --hard'
 
 use-dev:
-	@$(git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
+	@git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
 		if [ "$$branch" = "dev" ]; then \
 			git checkout dev && git pull; \
 		else \
 			git checkout $$branch; \
-		fi')
+		fi'
 
 use-main:
-	@$(git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
-		if [ "$$branch" = "main" ] || [ "$$branch" = "master" ]; then \
-			if [ "$$branch" = "main" ]; then git checkout main; else git checkout master; fi && git pull; \
-		else \
-			git checkout $$branch; \
-		fi')
+	$(call USE_BRANCH,main,master)
 
-extract-deps:
-	@python3 extract_deps.py
+# Per-submodule status
+status-%:
+	@MODULE="$*"; \
+	MODPATH=$$(git config --file .gitmodules submodule.$$MODULE.path 2>/dev/null); \
+	if [ -z "$$MODPATH" ]; then \
+		echo "Error: No submodule named '$$MODULE' found"; \
+		exit 1; \
+	fi; \
+	git submodule status -- "$$MODPATH"
 
-# Compose targets
-COMPOSE ?= docker compose
-COMPOSE_FILE ?= docker-compose.yml
-COMPOSE_PROJECT_NAME ?= dataflow-testing
+# Advance one submodule without switching the parent repository branch.
+# Attached submodules follow their configured upstream; detached submodules
+# advance to origin's default branch and remain detached. Shared by update-all
+# and update-%.
+define UPDATE_SUBMODULE
+update_submodule() { \
+	sub="$$1"; \
+	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
+	if [ -z "$$modpath" ]; then \
+		echo "WARNING: No .gitmodules entry for '$$sub'"; \
+		return 1; \
+	fi; \
+	echo "Fetching remotes for '$$sub'..."; \
+	git -C "$$modpath" fetch --all || { \
+		echo "WARNING: Could not fetch '$$sub'; skipping update"; \
+		return 1; \
+	}; \
+	branch=$$(git -C "$$modpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""; \
+	if [ -z "$$branch" ]; then \
+		upstream=$$(git -C "$$modpath" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || upstream=""; \
+		if [ -z "$$upstream" ]; then \
+			echo "WARNING: origin/HEAD is not available for '$$sub'"; \
+			return 1; \
+		fi; \
+		git -C "$$modpath" checkout --detach "$$upstream" || { echo "WARNING: Could not advance '$$sub' to $$upstream"; return 1; }; \
+		echo "Updated '$$sub' to $$upstream (still detached)"; \
+		return 0; \
+	fi; \
+	upstream=$$(git -C "$$modpath" rev-parse --abbrev-ref --symbolic-full-name "$$branch@{upstream}" 2>/dev/null) || upstream=""; \
+	if [ -z "$$upstream" ]; then \
+		echo "WARNING: '$$sub' branch '$$branch' has no configured upstream"; \
+		return 1; \
+	fi; \
+	if git -C "$$modpath" merge-base --is-ancestor HEAD "$$upstream"; then \
+		echo "Updating '$$sub' ($$branch) to $$upstream..."; \
+		git -C "$$modpath" merge --ff-only "$$upstream" || { echo "WARNING: Could not fast-forward '$$sub'"; return 1; }; \
+	elif git -C "$$modpath" merge-base --is-ancestor "$$upstream" HEAD; then \
+		echo "'$$sub' is already ahead of $$upstream; leaving it unchanged"; \
+	else \
+		echo "WARNING: '$$sub' branch '$$branch' has diverged from $$upstream; refusing to rewrite local history"; \
+		return 1; \
+	fi; \
+	return 0; \
+};
+endef
 
-# Profiles for compose-up-full (biomate, genomics-status, dind)
-FULL_LINKS := full dind
+update-%:
+	@$(call UPDATE_SUBMODULE) update_submodule $*
 
-# Set COMPOSE_PROFILES from FULL_LINKS when COMPOSE_LINKS is 'full'
-# Otherwise, COMPOSE_LINKS can be a single profile name.
-COMPOSE_LINKS ?= $(FULL_LINKS)
+update-all: sync
+	@$(call UPDATE_SUBMODULE) failed=0; for sub in $(SUBMODULES); do update_submodule "$$sub" || failed=1; done; git submodule status || failed=1; exit "$$failed"
 
-COMPOSE := $(COMPOSE) -f $(COMPOSE_FILE) -p $(COMPOSE_PROJECT_NAME)
+# ---------------------------------------------------------------------------
+# Compose testing environment (Yggdrasil workflow)
+# ---------------------------------------------------------------------------
+COMPOSE := docker compose
 
-$(COMPOSE):
-	@command -v docker > /dev/null || (echo "ERROR: docker not found"; exit 1)
+# Web-service links printed after a successful "up".
+# Argument 1: optional extra link lines (e.g. profile-gated services),
+# each prefixed with $(TAB) so they land on their own recipe line.
+TAB := $(empty) $(empty)
 
-ifeq ($(COMPOSE_LINKS),full)
-$(COMPOSE): COMPOSE_PROFILES := $(FULL_LINKS)
+# Credentials: if the user overrides STACK_COUCH_USER/PASSWORD (via
+# environment or `make VAR=...`), print the variable name instead of the
+# value. Empty values fall back to the defaults, matching docker-compose.
+# The name is emitted as '$$VAR' so the shell prints the literal
+# '$VAR'; the value is single-quoted at the printf call site, outside
+# the double quotes, to keep the shell from expanding it.
+ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_USER)),$(STACK_COUCH_USER)))
+	CREDENTIAL_USER = $$STACK_COUCH_USER
+else
+	CREDENTIAL_USER = admin
+endif
+ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_PASSWORD)),$(STACK_COUCH_PASSWORD)))
+	CREDENTIAL_PASSWORD = $$STACK_COUCH_PASSWORD
+else
+	CREDENTIAL_PASSWORD = secret
 endif
 
 # The yggdrasil service runs the dind-flavoured image
@@ -230,6 +302,89 @@ compose-ps: ## Show stack status
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
 	$(COMPOSE) --profile full --profile dind down -v --remove-orphans
+
+compose-reset-statusdb: ## Reset databases through the running CouchDB API while Yggdrasil is paused (CONFIRM=1)
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: This deletes all databases in the statusdb container; rerun with CONFIRM=1"; \
+		exit 1; \
+	fi
+	@set -eu; \
+	paused=0; \
+	ygg_container=$$($(COMPOSE) ps -q yggdrasil); \
+	if [ -n "$$ygg_container" ]; then \
+		ygg_state=$$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' "$$ygg_container"); \
+		if [ "$$ygg_state" = "true false" ]; then \
+			$(COMPOSE) pause yggdrasil; \
+			paused=1; \
+			trap '$(COMPOSE) unpause yggdrasil' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM; \
+		fi; \
+	fi; \
+	$(COMPOSE) exec -T statusdb bash -euc ' \
+		auth="$${COUCHDB_USER:?}:$${COUCHDB_PASSWORD:?}"; \
+		url="http://localhost:5984"; \
+		test -x /opt/couchdb/scripts/init-seed-data.sh; \
+		databases=$$(curl -fsS --max-time 30 -u "$$auth" "$$url/_all_dbs"); \
+		database_paths=$$(printf "%s" "$$databases" | python3 -c "import json, sys, urllib.parse; print(*[urllib.parse.quote(name, safe=str()) for name in json.load(sys.stdin)], sep=chr(10))"); \
+		rm -f /opt/couchdb/data/.seed_initialized; \
+		for database in $$database_paths; do \
+			curl -fsS --max-time 30 -u "$$auth" -X DELETE "$$url/$$database" >/dev/null; \
+			curl -fsS --max-time 30 -u "$$auth" -X PUT "$$url/$$database" >/dev/null; \
+		done; \
+		/opt/couchdb/scripts/init-seed-data.sh; \
+		test -f /opt/couchdb/data/.seed_initialized; \
+	'; \
+	if [ "$$paused" = "1" ]; then \
+		$(COMPOSE) unpause yggdrasil; \
+		trap - 0 INT TERM; \
+	fi; \
+	echo "StatusDB reset and seeded. Yggdrasil restored to its previous state; files and other services were left untouched."
+
+compose-reset-work: ## Clear Yggdrasil's /work volume while it is paused (CONFIRM=1)
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: This deletes all Yggdrasil /work contents, including cached results; rerun with CONFIRM=1"; \
+		exit 1; \
+	fi
+	@set -eu; \
+	ygg_container=$$($(COMPOSE) ps -q yggdrasil); \
+	if [ -z "$$ygg_container" ]; then echo "ERROR: Yggdrasil must be running"; exit 1; fi; \
+	work_volume=$$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/work") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' "$$ygg_container"); \
+	if [ -z "$$work_volume" ]; then echo "ERROR: No named volume mounted at /work; refusing to delete files"; exit 1; fi; \
+	image=$$(docker inspect --format '{{.Image}}' "$$ygg_container"); \
+	ygg_state=$$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' "$$ygg_container"); \
+	paused=0; \
+	case "$$ygg_state" in \
+		"true false") \
+			$(COMPOSE) pause yggdrasil; \
+			paused=1; \
+			trap '$(COMPOSE) unpause yggdrasil' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM ;; \
+		"true true") ;; \
+		*) echo "ERROR: Yggdrasil must be running"; exit 1 ;; \
+	esac; \
+	docker run --rm --network none --user 0 \
+		--mount "type=volume,source=$$work_volume,target=/work" \
+		--entrypoint /bin/sh "$$image" -ec 'find /work -xdev -mindepth 1 -delete'; \
+	if [ "$$paused" = "1" ]; then \
+		$(COMPOSE) unpause yggdrasil; \
+		trap - 0 INT TERM; \
+	fi; \
+	echo "Yggdrasil /work cleared; previous pause state restored. Databases, events, and logs were left untouched."
+
+compose-trigger-rerun: ## Increment run_token on all non-system documents in yggdrasil_plans
+	@set -eu; \
+	documents=$$(curl -fsS --max-time 30 \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		'http://localhost:5984/yggdrasil_plans/_all_docs?include_docs=true'); \
+	body=$$(printf '%s' "$$documents" | python3 -c 'import json, sys; docs = [row["doc"] for row in json.load(sys.stdin)["rows"] if not row["id"].startswith("_")]; assert all(type(doc.get("run_token", 0)) is int for doc in docs), "run_token must be an integer; no documents updated"; print(json.dumps({"docs": [dict(doc, run_token=doc.get("run_token", 0) + 1) for doc in docs]}))'); \
+	result=$$(printf '%s' "$$body" | curl -fsS --max-time 30 -X POST \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		-H 'Content-Type: application/json' \
+		--data-binary @- \
+		'http://localhost:5984/yggdrasil_plans/_bulk_docs'); \
+	printf '%s' "$$result" | python3 -c 'import json, sys; results = json.load(sys.stdin); errors = [row for row in results if "error" in row]; [print("ERROR: " + json.dumps(row), file=sys.stderr) for row in errors]; print("Incremented run_token on %d plan document(s)." % sum(bool(row.get("ok")) for row in results)); sys.exit(bool(errors))'
 
 compose-scenario: ## Inject a fresh test scenario into a running stack
 	@curl -sf -X PUT \
