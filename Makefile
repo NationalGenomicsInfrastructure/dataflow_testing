@@ -62,7 +62,7 @@ init-target:
 			echo "$$sub already initialized"; \
 		fi \
 	else \
-		$(git submodule add --name "$$sub" git@github.com:ngi-sweden/$$sub.git "$$sub") || exit 1; \
+		$(git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub") || exit 1; \
 	fi
 
 deinit:
