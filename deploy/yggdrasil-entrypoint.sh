@@ -18,7 +18,9 @@
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
 #       /work volume where the dind sidecar can see them, and the page
 #       cache for that data is pre-warmed (see stage_dev_data)
-#   6. (optional) genomics-status is reachable, when it is part of this stack
+#   6. (optional) genomics-status is reachable, when it is part of this
+#       stack (it is in the default compose stack; the wait is a soft gate
+#       - the daemon does not depend on the UI)
 #
 # It then hands over to the requested yggdrasil command (default: `--dev daemon`).
 #
@@ -211,7 +213,7 @@ stage_dev_data() {
 
 stage_dev_data
 
-# 6. Optional UI service (only present with --profile full).
+# 6. Optional UI service (in the default stack; soft gate).
 wait_for_service "genomics-status" 9761 "genomics-status" 300
 
 # 7. Hand over to yggdrasil.

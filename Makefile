@@ -28,16 +28,16 @@ help: ## Show this help
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
 	@echo ""
 	@echo "Compose targets (Yggdrasil workflow testing environment):"
-	@echo "  compose-up                Build and start the stack (statusdb, yggdrasil)"
-	@echo "  compose-up-full           Same as compose-up plus biomate + genomics-status (profile full)"
+	@echo "  compose-up                Build and start the stack (statusdb, yggdrasil, genomics-status)"
+	@echo "  compose-up-full           Same as compose-up plus biomate (profile full)"
 	@echo "  compose-up-statusdb       Build and start only statusdb"
 	@echo "  compose-up-biomate        Build and start only biomate (profile full)"
 	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its dep: statusdb)"
-	@echo "  compose-up-genomics-status  Build and start genomics-status (profile full)"
+	@echo "  compose-up-genomics-status  Build and start genomics-status"
 	@echo "  compose-build-yggdrasil   Build the base + dind-flavoured yggdrasil images"
 	@echo "  compose-build-gs-base     Build the genomics-status base image (conda env)"
-	@echo "  compose-rebuild           Rebuild statusdb + yggdrasil images without cache; recreate the stack"
-	@echo "  compose-rebuild-full      Same, plus biomate and genomics-status (profile full)"
+	@echo "  compose-rebuild           Rebuild all default-stack images without cache; recreate the stack"
+	@echo "  compose-rebuild-full      Same, plus biomate (profile full)"
 	@echo "  compose-down              Stop and remove the stack (volumes are kept)"
 	@echo "  compose-logs              Follow yggdrasil logs"
 	@echo "  compose-ps                Show stack status"
@@ -114,16 +114,51 @@ sync:
 reset:
 	@git submodule foreach --recursive 'git reset --hard'
 
+# Switch the top-level repository to the given branch and check out the
+# submodule commits pinned by that branch. Submodules are never switched
+# to a branch themselves: they are left detached at the pinned commits.
+# Submodules with uncommitted changes are left as-is, with a warning.
+# Argument 1: branch name; argument 2: fallback branch name (optional).
+define USE_BRANCH
+@branch="$(1)"; \
+if git rev-parse --verify --quiet refs/heads/$$branch >/dev/null; then \
+	git checkout "$$branch" || exit 1; \
+elif git rev-parse --verify --quiet refs/remotes/origin/$$branch >/dev/null; then \
+	echo "No local branch '$$branch'; creating it from origin/$$branch"; \
+	git checkout -b "$$branch" "origin/$$branch" || exit 1; \
+else \
+	fallback="$(2)"; \
+	if [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/heads/$$fallback >/dev/null; then \
+		echo "No branch '$(1)' found; using '$(2)' instead"; \
+		git checkout "$$fallback" || exit 1; \
+	elif [ -n "$$fallback" ] && git rev-parse --verify --quiet refs/remotes/origin/$$fallback >/dev/null; then \
+		echo "No branch '$(1)' found; creating '$(2)' from origin/$$fallback"; \
+		git checkout -b "$$fallback" "origin/$$fallback" || exit 1; \
+	else \
+		echo "Error: branch '$(1)' not found (locally or on origin)"; \
+		exit 1; \
+	fi; \
+fi; \
+for sub in $(SUBMODULES); do \
+	modpath=$$(git config --file .gitmodules submodule.$$sub.path 2>/dev/null); \
+	if [ -n "$$modpath" ] && [ -d "$$modpath" ] && [ -n "$$(git -C "$$modpath" status --porcelain 2>/dev/null)" ]; then \
+		echo "WARNING: '$$sub' has uncommitted changes; leaving it at its current commit"; \
+	fi; \
+done; \
+echo "Checking out the submodule commits pinned by the branch..."; \
+git submodule update --init --recursive || echo "WARNING: some submodules were not updated (see messages above)"; \
+git submodule status
+endef
+
+# Switch the repo to the 'dev' branch and pin the submodules to its commits.
 use-dev:
-	@git submodule foreach --recursive 'branch=$$(git config -f $$toplevel/.gitmodules submodule.$$name.branch); \
-		if [ "$$branch" = "dev" ]; then \
-			git checkout dev && git pull; \
-		else \
-			git checkout $$branch; \
-		fi'
+	$(call USE_BRANCH,dev,)
 
 use-main:
 	$(call USE_BRANCH,main,master)
+
+extract-deps:
+	@python3 extract_deps.py
 
 # Per-submodule status
 status-%:
@@ -230,7 +265,7 @@ compose-build-yggdrasil: ## Build the base + dind-flavoured yggdrasil images
 	docker build -q $(YGG_NO_CACHE) -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
 	docker build -q $(YGG_NO_CACHE) -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
 
-# The genomics-status service (profile "full") builds from
+# The genomics-status service builds from
 # deploy/Dockerfile.genomics-status, which is layered ON TOP of
 # dataflow-genomics-status-base:latest (the conda/pip environment image,
 # built from the genomics-status submodule's own Dockerfile). Compose
@@ -248,18 +283,20 @@ define COMPOSE_LINKS
 $(1)
 endef
 
-# Extra link lines for the services that only run with profile "full"
-# (biomate and genomics-status); passed via $(1) by those targets.
-FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n  Genomics Status:            http://localhost:9761\n'
+# Extra link lines, passed via $(1) by the up/rebuild targets.
+# GS_LINKS: genomics-status (default stack). FULL_LINKS: biomate
+# (profile "full") plus genomics-status.
+GS_LINKS = $(TAB)@printf '  Genomics Status:            http://localhost:9761\n'
+FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n'$(GS_LINKS)
 
 
-# Build and start the stack (statusdb + yggdrasil)
-compose-up: compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil)
+# Build and start the stack (statusdb + yggdrasil + genomics-status)
+compose-up: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, genomics-status)
 	$(COMPOSE) up -d
-	$(call COMPOSE_LINKS,)
+	$(call COMPOSE_LINKS,$(GS_LINKS))
 
-# Build and start the full stack (with biomate + genomics-status)
-compose-up-full: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, biomate, genomics-status)
+# Build and start the full stack (core + biomate)
+compose-up-full: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, genomics-status, biomate)
 	$(COMPOSE) --profile full up -d
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
@@ -275,18 +312,20 @@ compose-up-biomate: ## Build and start only biomate (profile full)
 compose-up-yggdrasil: compose-build-yggdrasil ## Build and start yggdrasil (plus its dep: statusdb)
 	$(COMPOSE) up -d yggdrasil
 
-# Build and start only genomics-status (profile full)
-compose-up-genomics-status: compose-build-gs-base ## Build and start genomics-status (profile full)
-	$(COMPOSE) --profile full up -d genomics-status
+# Build and start only genomics-status
+compose-up-genomics-status: compose-build-gs-base ## Build and start genomics-status
+	$(COMPOSE) up -d genomics-status
 
 # Rebuild images without cache and recreate the stack. The yggdrasil
 # images are built outside compose (see compose-build-yggdrasil), so they
-# get the same --no-cache treatment via YGG_NO_CACHE.
-compose-rebuild: ## Rebuild statusdb + yggdrasil images without cache; recreate the stack
+# get the same --no-cache treatment via YGG_NO_CACHE; the genomics-status
+# base image is no-cache-rebuilt inline, as compose never builds it.
+compose-rebuild: ## Rebuild all default-stack images without cache; recreate the stack
+	docker build -q --no-cache -t $(GS_BASE_IMAGE) ./genomics-status
 	$(COMPOSE) build --no-cache
 	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
 	$(COMPOSE) up -d --force-recreate
-	$(call COMPOSE_LINKS,)
+	$(call COMPOSE_LINKS,$(GS_LINKS))
 
 # Rebuild full stack images without cache and recreate. The genomics-status
 # base image is no-cache-rebuilt inline first, as compose never builds it
@@ -298,9 +337,9 @@ compose-rebuild-full: ## Rebuild all images without cache; recreate the stack (p
 	$(COMPOSE) --profile full up -d --force-recreate
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
-# Teardown always passes --profile full and --profile dind so profile-gated
-# services (biomate, genomics-status, the dind sidecar) are covered no matter
-# how the stack was started; down only acts on containers that exist.
+# Teardown always passes --profile full (and --profile dind) so
+# profile-gated services (biomate) are covered no matter how the stack
+# was started; down only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
 	$(COMPOSE) --profile full --profile dind down --remove-orphans
 
@@ -496,10 +535,13 @@ compose-inject: ## Inject fresh generated flowcells into a running stack (COUNT=
 		--template-flowcell-id "$${f_id}" \
 		--template-demux-id "$${d_id}" \
 		$$extra
-# Mark a seeded flowcell as fully synced to trigger demux workflow
+# Mark a seeded flowcell as fully synced to trigger demux workflow.
+# FLOWCELL_ID selects which seeded flowcell to finalize (a matching
+# deploy/seed/flowcell_status/flowcell_status_<id>.json must exist);
+# override with: make compose-sync-flowcell FLOWCELL_ID=<id>
 FLOWCELL_ID ?= A12GGASZR5
 compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding transferred_to_hpc event
-	@file="deploy/seed/flowcell_status/flowcell_status_$${FLOWCELL_ID}.json"; \
+	@file="deploy/seed/flowcell_status/flowcell_status_$(FLOWCELL_ID).json"; \
 	if [ ! -f "$$file" ]; then \
 		echo "error: flowcell config file '$$file' not found"; \
 		exit 1; \
@@ -519,6 +561,6 @@ compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding tra
 			-H 'Content-Type: application/json' \
 			--data-binary "$${body}" \
 			"http://localhost:5984/flowcell_status/$${id}" >/dev/null && \
-		echo "Finalized flowcell doc '$${id}' (added transferred_to_hpc event at $${now}) for flowcell $${FLOWCELL_ID}"; \
+		echo "Finalized flowcell doc '$${id}' (added transferred_to_hpc event at $${now}) for flowcell $(FLOWCELL_ID)"; \
 	fi
 	@echo "Watch the workflow with: make compose-logs"

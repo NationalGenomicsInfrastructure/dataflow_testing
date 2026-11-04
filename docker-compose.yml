@@ -1,12 +1,10 @@
 # Testing environment for the Yggdrasil workflow.
 #
-#   make compose-up        # statusdb + yggdrasil
-#   make compose-up-full   # the above + biomate + genomics-status
-#                          # (--profile full)
-#   make compose-up-dind   # yggdrasil image with Nextflow + Docker CLI,
-#                          # able to run nf-core pipelines via a docker:dind
-#                          # sidecar (profile "dind"); test with
-#                          # make compose-demux-test
+#   make compose-up        # statusdb + yggdrasil + genomics-status
+#                          # (yggdrasil runs the dind-flavoured image with a
+#                          # docker:dind sidecar, so it can run nf-core
+#                          # pipelines)
+#   make compose-up-full   # the above + biomate (--profile full)
 #   make compose-rebuild   # rebuild all images without cache (recreate containers)
 #   make compose-logs      # follow yggdrasil logs
 #   make compose-reset     # tear everything down, including volumes
@@ -61,9 +59,9 @@ services:
     build:
       context: ./BioMate
       dockerfile: Dockerfile
-    # Started only with --profile full (make compose-up-full /
-    # compose-up-dind): nothing at runtime depends on the BioMate web
-    # interface (the dmx_realm demux steps are simulated).
+    # Started only with --profile full (make compose-up-full): nothing at
+    # runtime depends on the BioMate web interface (the dmx_realm demux
+    # steps are simulated).
     profiles: ["full"]
     command: ["biomate", "web-interface", "--host", "0.0.0.0", "--port", "8765"]
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
@@ -94,7 +92,10 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile.genomics-status
-    profiles: ["full"]
+    # Part of the default stack: the yggdrasil entrypoint waits for this
+    # UI before starting the daemon (deploy/yggdrasil-entrypoint.sh,
+    # step 6), so it comes up with the core stack, not only with
+    # --profile full.
     ports:
       - "9761:9761"
     healthcheck:
@@ -163,14 +164,18 @@ services:
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
-      # Tiny Illumina BCL run for nf-core/demultiplex test runs
-      # (make compose-demux-test).
+      # Tiny Illumina BCL run for nf-core/demultiplex test runs (the
+      # dmx_realm demux workflow; see the README "Firing more work").
       - ./BioMate/temp:/data/test_run:ro
     depends_on:
-      # statusdb only. biomate is profile-gated ("full") and compose
-      # rejects depends_on entries that point at profile-excluded
+      # statusdb and dind only. biomate is profile-gated ("full") and
+      # compose rejects depends_on entries that point at profile-excluded
       # services; nothing at runtime needs biomate anyway (the
       # dmx_realm demux steps are simulated, not real BioMate runs).
+      # genomics-status is in the default stack but stays a soft
+      # entrypoint wait, not a static dependency: it is a UI the daemon
+      # does not need, and a hard gate would couple daemon startup to its
+      # slower conda-python boot.
       statusdb:
         condition: service_healthy
       # Awaited: the daemon and the realm talk to the dind daemon via
@@ -206,7 +211,7 @@ services:
       # Share the ygg-work volume: Nextflow work dirs must be visible
       # from BOTH containers so the nested daemon can bind-mount them
       # into pipeline containers (run nextflow with
-      # --work-dir /work/... — see compose-demux-test).
+      # --work-dir /work/...).
       - ygg-work:/work
     healthcheck:
       test: ["CMD-SHELL", "docker info >/dev/null 2>&1"]
