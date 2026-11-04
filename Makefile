@@ -102,12 +102,6 @@ deinit-target:
 		echo "$$sub not found"; \
 	fi
 
-update-all:
-	@git submodule update --remote
-
-update-%:
-	@git submodule update --remote "$(SUBMODULE)"
-
 status:
 	@git submodule status --recursive
 
@@ -247,13 +241,27 @@ GS_BASE_IMAGE := dataflow-genomics-status-base:latest
 compose-build-gs-base: ## Build the genomics-status base image (conda env)
 	docker build -q -t $(GS_BASE_IMAGE) ./genomics-status
 
+define COMPOSE_LINKS
+	@echo ""
+	@echo "Stack is up. Web services:"
+	@printf '  StatusDB (CouchDB Fauxton): http://localhost:5984/_utils/  (login: %s / %s)\n' '$(CREDENTIAL_USER)' '$(CREDENTIAL_PASSWORD)'
+$(1)
+endef
+
+# Extra link lines for the services that only run with profile "full"
+# (biomate and genomics-status); passed via $(1) by those targets.
+FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n  Genomics Status:            http://localhost:9761\n'
+
+
 # Build and start the stack (statusdb + yggdrasil)
 compose-up: compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil)
 	$(COMPOSE) up -d
+	$(call COMPOSE_LINKS,)
 
 # Build and start the full stack (with biomate + genomics-status)
 compose-up-full: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, biomate, genomics-status)
 	$(COMPOSE) --profile full up -d
+	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Build and start only statusdb
 compose-up-statusdb: ## Build and start only statusdb
@@ -278,6 +286,7 @@ compose-rebuild: ## Rebuild statusdb + yggdrasil images without cache; recreate 
 	$(COMPOSE) build --no-cache
 	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
 	$(COMPOSE) up -d --force-recreate
+	$(call COMPOSE_LINKS,)
 
 # Rebuild full stack images without cache and recreate. The genomics-status
 # base image is no-cache-rebuilt inline first, as compose never builds it
@@ -287,6 +296,7 @@ compose-rebuild-full: ## Rebuild all images without cache; recreate the stack (p
 	$(COMPOSE) --profile full build --no-cache
 	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
 	$(COMPOSE) --profile full up -d --force-recreate
+	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Teardown always passes --profile full and --profile dind so profile-gated
 # services (biomate, genomics-status, the dind sidecar) are covered no matter

@@ -16,7 +16,8 @@
 #       would otherwise fall back to its built-in defaults silently)
 #   5. (optional) a test scenario document is injected into the stack
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
-#       /work volume where the dind sidecar can see them
+#       /work volume where the dind sidecar can see them, and the page
+#       cache for that data is pre-warmed (see stage_dev_data)
 #   6. (optional) genomics-status is reachable, when it is part of this stack
 #
 # It then hands over to the requested yggdrasil command (default: `--dev daemon`).
@@ -192,6 +193,15 @@ stage_dev_data() {
         log "Staging test flowcells: /Illumina/NextSeq -> /work/Illumina/NextSeq"
         mkdir -p /work/Illumina/NextSeq
         cp -rn /Illumina/NextSeq/. /work/Illumina/NextSeq/
+        # Pre-warm the page cache for the staged data. The first pipeline
+        # after a (re)start would otherwise read all BCL files cold; under
+        # that slow I/O the BCLCONVERT container exhausts Docker's default
+        # 1024 open-file limit and aborts with spurious "Missing file"
+        # errors on files that are present (the nofile override in
+        # deploy/nf/demultiplex_local.config is the real fix; this keeps
+        # the first run fast as well).
+        log "Pre-warming page cache for /work/Illumina/NextSeq"
+        find /work/Illumina/NextSeq -type f -exec cat {} + > /dev/null || log "WARNING: page-cache pre-warm failed; continuing"
     fi
     if [ -f /etc/demux/demultiplex_local.config ] && [ ! -e /work/demultiplex_local.config ]; then
         log "Staging Nextflow resource config to /work/demultiplex_local.config"
