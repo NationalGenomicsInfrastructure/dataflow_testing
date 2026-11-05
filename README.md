@@ -15,7 +15,7 @@ execution → event/ops artifacts.
                     │        │ http://statusdb:5984                                        │
   :8765 ───────────►│ biomate     BioMate web interface (only with --profile full)         │
                     │                                                                      │
-  :9761 ───────────►│ genomics-status  (only with --profile full)                          │
+  :9761 ───────────►│ genomics-status  (default stack)                                     │
                     │        ▲                                                             │
                     │        │ (stub config → statusdb)                                    │
                     │  ┌────────────────────────────────────────────────────────────────┐  │
@@ -30,7 +30,7 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (core: statusdb + yggdrasil; profile full adds biomate + genomics-status)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status; profile full adds biomate)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
@@ -41,7 +41,7 @@ execution → event/ops artifacts.
 │   ├── seed/demux_sample_info/     # test-flowcell seeds, bind-mounted into statusdb
 │   ├── seed/flowcell_status/       # test-flowcell seeds, bind-mounted into statusdb
 │   ├── Dockerfile.genomics-status   # builds on top of the submodule's conda-env image
-│   └── genomics-status/             # stub settings/credentials for the full stack
+│   └── genomics-status/             # stub settings/credentials for genomics-status
 ├── Makefile                     # submodule management + compose-* targets
 ├── pyproject.toml / pixi.lock   # pixi workspace aggregating submodule deps
 ├── extract_deps.py / get_deps.sh
@@ -74,7 +74,7 @@ several-minute build. Subsequent builds are fast (layer caching).
 git clone git@github.com:NationalGenomicsInfrastructure/dataflow_testing.git
 cd dataflow_testing
 make init            # clone/update the submodules
-make compose-up      # build + start statusdb, yggdrasil
+make compose-up      # build + start statusdb, yggdrasil, genomics-status
 ```
 
 That's it. What happens automatically:
@@ -139,7 +139,7 @@ UIs on the host:
 |------|---------|
 | 5984 | CouchDB (StatusDB) — `_all_docs`, `_changes`, etc. |
 | 8765 | BioMate web interface (only in the `full` profile) |
-| 9761 | Genomics Status (only in the `full` profile) |
+| 9761 | Genomics Status (status dashboard UI) |
 
 ## Firing more work
 
@@ -180,7 +180,6 @@ make compose-inject                         # +1 random flowcell (fresh ids)
 make compose-inject COUNT=3 LANES=4         # 3 flowcells, 4 lanes each
 make compose-inject DIR=BioMate/temp        # docs built from that run folder's
                                             # SampleSheet.csv (upserted by flowcell_id)
-make compose-hold                           # seed docs but hold demux (no transferred_to_hpc)
 make compose-sync-flowcell                       # add transferred_to_hpc to trigger demux
 make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6  # specify which flowcell to finalize
 ```
@@ -193,10 +192,10 @@ directory containing one), so the injected documents carry that run's actual
 samplesheet content instead of random data. Re-injecting the same run folder
 replaces the existing documents and re-triggers the workflow.
 
-`compose-hold` seeds all flowcell documents but omits the `transferred_to_hpc`
-event, preventing the demux workflow from starting. Use `compose-sync-flowcell`
-(with optional FLOWCELL_ID parameter) to add the event and trigger the workflow
-for a specific flowcell. The default flowcell ID is A12GGASZR5.
+The four seeded flowcells deliberately omit the `transferred_to_hpc` event, so
+the demux workflow does not start on a fresh stack. Use `compose-sync-flowcell`
+(with an optional `FLOWCELL_ID=` parameter) to add the event and trigger the
+workflow for one flowcell. The default flowcell ID is A12GGASZR5.
 
 ### Test recipes
 
@@ -212,23 +211,25 @@ and `PUT` to `http://localhost:5984/yggdrasil_testdocs/<your-id>`):
 | `long_running` | extended sleep (timeout testing) |
 | `artifact_write` | tests artifact registration |
 
-## Full stack (genomics-status)
+## Genomics Status
 
-```bash
-make compose-up-full    # compose-up plus genomics-status (profile "full")
-```
+`genomics-status` (the status dashboard UI on port 9761) is part of the
+default stack: `make compose-up` builds its images and starts the container
+alongside statusdb and yggdrasil. The yggdrasil entrypoint waits for it
+before starting the daemon (soft gate, up to 300 s). It is not a compose
+`depends_on` because it is a UI the daemon does not depend on — a hard gate
+would couple daemon startup to its slower conda-python boot.
 
-`genomics-status` is opt-in because it is the heaviest service: the submodule
-Dockerfile only installs the conda environment, so `deploy/Dockerfile.genomics-status`
-builds on top of it and bakes in the app source plus stub configuration
+It is the heaviest service to build: the submodule Dockerfile only installs
+the conda environment, so `deploy/Dockerfile.genomics-status` builds on top
+of it and bakes in the app source plus stub configuration
 (`deploy/genomics-status/`: `settings.yaml`, `.genologicsrc`, `.genosqlrc.yaml`,
 `lims_backend_cred.yaml`, `orderportal_cred.yaml`). The stubs point LIMS /
 order portal / Zendesk / Jira / Slack at mock URLs, and the app runs with
 `--testing_mode` (no Google auth). It talks to the real `statusdb` CouchDB.
 
-In the full stack, the yggdrasil entrypoint additionally waits for
-`genomics-status:9761` before starting the daemon (it can't be a compose
-`depends_on` because profile-gated services can't be static dependencies).
+`make compose-up-full` additionally starts the `biomate` web interface
+(profile "full").
 
 ## Configuration
 
@@ -304,19 +305,18 @@ Initialization does not update submodules recursively. The nested
 once cloned, later `make init` runs leave its commit unchanged.
 
 After updating submodules, `make compose-up` rebuilds the images from the new
-code. For genomics-status, the base (conda env) image is rebuilt automatically
-by `compose-up-full`.
+code, including the genomics-status base (conda env) image.
 
 ## Makefile reference (compose)
 
 | Target | Purpose |
 |--------|---------|
-| `make compose-up` | Build + start statusdb, yggdrasil |
-| `make compose-up-full` | Same, plus biomate and genomics-status (profile `full`) |
+| `make compose-up` | Build + start statusdb, yggdrasil, genomics-status |
+| `make compose-up-full` | Same, plus biomate (profile `full`) |
 | `make compose-up-statusdb` | Build + start only statusdb |
 | `make compose-up-biomate` | Build + start only biomate (profile `full`) |
 | `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its dep: statusdb) |
-| `make compose-up-genomics-status` | Build + start genomics-status (profile `full`; also starts statusdb) |
+| `make compose-up-genomics-status` | Build + start genomics-status (also starts statusdb) |
 | `make compose-build-gs-base` | Build only the genomics-status base image (conda env) |
 | `make compose-logs` | Follow yggdrasil logs |
 | `make compose-ps` | Stack status |
@@ -324,8 +324,7 @@ by `compose-up-full`.
 | `make compose-seed-status` | PUT the BioMate `flowcell_status` + `demux_sample_info` seed docs if absent (idempotent; a no-op on a fresh stack) |
 | `make compose-trigger` | Re-touch the seeded docs (timestamp → now) to re-fire the demux workflow; `DBS=` selects docs |
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
-| `make compose-hold` | Seed all flowcell docs but omit `transferred_to_hpc` event to hold demux workflow |
-| `make compose-sync-flowcell` | Add `transferred_to_hpc` event to trigger demux workflow for held flowcell (default: A12GGASZR5) |
+| `make compose-sync-flowcell` | Add `transferred_to_hpc` event to trigger the demux workflow for a seeded flowcell (default: A12GGASZR5) |
 | `make compose-sync-flowcell FLOWCELL_ID=<id>` | Specify which flowcell to finalize (e.g., B98QWERTY6, C36MNBVCX7, D74LKJHGF8) |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
@@ -334,7 +333,7 @@ by `compose-up-full`.
 
 - **`Network … Resource is still in use`** (on `down`) or
   **`failed to set up container networking: network … not found`** (on `up`)
-  — a profile-gated container (e.g. `genomics-status` from a previous
+  — a profile-gated container (e.g. `biomate` from a previous
   `compose-up-full`) was left behind by a default-profile `down`, keeping the
   shared project network alive (or stranding the container without it).
   `make compose-down` / `make compose-reset` now pass `--profile full` and
@@ -372,4 +371,4 @@ by `compose-up-full`.
 | `Yggdrasil` | [NationalGenomicsInfrastructure/Yggdrasil](https://github.com/NationalGenomicsInfrastructure/Yggdrasil) | The orchestration daemon under test |
 | `demux_realm` | [NationalGenomicsInfrastructure/demux_realm](https://github.com/NationalGenomicsInfrastructure/demux_realm) | Yggdrasil realm for demux planning; installed into the Yggdrasil image as realm `dmx_realm` (`--no-deps`), watches the `demux_sample_info` + `flowcell_status` DBs (bootstrapped by the yggdrasil entrypoint). **Requires the Yggdrasil `dev` branch** (handler API `generate_plan_drafts`) |
 | `BioMate` | [NationalGenomicsInfrastructure/BioMate](https://github.com/NationalGenomicsInfrastructure/BioMate) | Bio-data tooling + web interface (`biomate`) |
-| `genomics-status` | [NationalGenomicsInfrastructure/genomics-status](https://github.com/NationalGenomicsInfrastructure/genomics-status) | Status dashboard UI (`genomics-status`, profile `full`) |
+| `genomics-status` | [NationalGenomicsInfrastructure/genomics-status](https://github.com/NationalGenomicsInfrastructure/genomics-status) | Status dashboard UI (`genomics-status`) |
