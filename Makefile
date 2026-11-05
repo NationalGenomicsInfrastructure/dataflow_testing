@@ -284,10 +284,15 @@ $(1)
 endef
 
 # Extra link lines, passed via $(1) by the up/rebuild targets.
+# A make variable cannot carry the newlines that separate recipe lines,
+# so each one must be a SINGLE recipe line: multi-line output comes from
+# one printf per variable (embedding $(GS_LINKS) in FULL_LINKS glues the
+# two commands onto one line, which the shell parses as excess printf
+# arguments).
 # GS_LINKS: genomics-status (default stack). FULL_LINKS: biomate
 # (profile "full") plus genomics-status.
 GS_LINKS = $(TAB)@printf '  Genomics Status:            http://localhost:9761\n'
-FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n'$(GS_LINKS)
+FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\n  Genomics Status:            http://localhost:9761\n'
 
 
 # Build and start the stack (statusdb + yggdrasil + genomics-status)
