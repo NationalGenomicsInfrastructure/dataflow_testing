@@ -141,6 +141,11 @@ services:
       # Invisible paths make Nextflow stage dangling symlinks there.
       NXF_HOME: /work/nf-nxf
       PYTHONUNBUFFERED: "1"
+      # Rich's console log handler sizes its line wrapping to the console
+      # width; with stdout as a pipe (detached container) it reads the
+      # COLUMNS env var instead of a TTY. 200 keeps long log lines
+      # unbroken in `docker compose logs`.
+      COLUMNS: "200"
       # Ensure Nextflow is in PATH (it should be set by the image, but
       # explicitly add it here to be safe)
       PATH: /opt/nextflow:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
