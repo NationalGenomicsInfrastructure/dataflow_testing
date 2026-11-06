@@ -1176,7 +1176,7 @@
         "RunName": "B98QWERTY6",
         "Date": "2026-03-10"
       },
-      "raw_samplesheet_settings": {
+      "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
         "MaskShortReads": 0
@@ -1224,7 +1224,7 @@
         "RunName": "B98QWERTY6",
         "Date": "2026-03-10"
       },
-      "raw_samplesheet_settings": {
+      "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
         "MaskShortReads": 0
@@ -1291,7 +1291,7 @@
         "RunName": "B98QWERTY6",
         "Date": "2026-03-10"
       },
-      "raw_samplesheet_settings": {
+      "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
         "MaskShortReads": 0
@@ -1348,7 +1348,7 @@
         "RunName": "B98QWERTY6",
         "Date": "2026-03-10"
       },
-      "raw_samplesheet_settings": {
+      "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
         "MaskShortReads": 0
