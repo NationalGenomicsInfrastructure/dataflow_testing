@@ -7,10 +7,10 @@ SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
 # or directory with the same name exists.
 .PHONY: help init init-% init-target deinit deinit-all deinit-% deinit-target \
         update-all update-% status status-% sync reset use-dev use-main extract-deps \
-        compose-build-yggdrasil compose-build-gs-base compose-up compose-up-full \
+        compose-build-yggdrasil compose-build-slurm compose-build-gs-base compose-up compose-up-full \
         compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
         compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
-        compose-scenario compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+        compose-scenario compose-scenario-slurm compose-seed-status compose-trigger compose-inject compose-sync-flowcell
 
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
@@ -35,6 +35,7 @@ help: ## Show this help
 	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its dep: statusdb)"
 	@echo "  compose-up-genomics-status  Build and start genomics-status"
 	@echo "  compose-build-yggdrasil   Build the base + dind-flavoured yggdrasil images"
+	@echo "  compose-build-slurm       Build the SLURM cluster images (controller + node)"
 	@echo "  compose-build-gs-base     Build the genomics-status base image (conda env)"
 	@echo "  compose-rebuild           Rebuild all default-stack images without cache; recreate the stack"
 	@echo "  compose-rebuild-full      Same, plus biomate (profile full)"
@@ -45,6 +46,7 @@ help: ## Show this help
 	@echo "  compose-reset-statusdb    Reset CouchDB while Yggdrasil is paused; preserve files (CONFIRM=1)"
 	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and resume it (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
+	@echo "  compose-scenario-slurm    Inject the SLURM submission scenario into a running stack"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
 	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
@@ -265,6 +267,13 @@ compose-build-yggdrasil: ## Build the base + dind-flavoured yggdrasil images
 	docker build -q $(YGG_NO_CACHE) -t $(YGG_BASE_IMAGE) -f deploy/Dockerfile.yggdrasil .
 	docker build -q $(YGG_NO_CACHE) -t $(YGG_DIND_IMAGE) -f deploy/Dockerfile.yggdrasil.dind .
 
+# The SLURM cluster images (deploy/Dockerfile.slurm-ctld / .slurmd /
+# .slurmdbd). `docker compose up` only builds images that are missing, so
+# this target (a prerequisite of the up targets) rebuilds them explicitly
+# to pick up changes; the builds are layer-cached when nothing changed.
+compose-build-slurm: ## Build the SLURM cluster images (controller + node + slurmdbd)
+	$(COMPOSE) build -q slurmctld slurmd slurmdbd
+
 # The genomics-status service builds from
 # deploy/Dockerfile.genomics-status, which is layered ON TOP of
 # dataflow-genomics-status-base:latest (the conda/pip environment image,
@@ -296,12 +305,12 @@ FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\
 
 
 # Build and start the stack (statusdb + yggdrasil + genomics-status)
-compose-up: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, genomics-status)
+compose-up: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status)
 	$(COMPOSE) up -d
 	$(call COMPOSE_LINKS,$(GS_LINKS))
 
 # Build and start the full stack (core + biomate)
-compose-up-full: compose-build-gs-base compose-build-yggdrasil ## Build and start the stack (statusdb, yggdrasil, genomics-status, biomate)
+compose-up-full: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status, biomate)
 	$(COMPOSE) --profile full up -d
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
@@ -447,6 +456,17 @@ compose-scenario: ## Inject a fresh test scenario into a running stack
 		--data-binary @deploy/seed/test_scenario_happy_path.json \
 		"http://localhost:5984/yggdrasil_testdocs/test_scenario:manual-$$(date +%s)" && \
 		echo "Scenario injected; watch it with: make compose-logs"
+
+# SLURM scenario: the plan submits a batch job to the stack's local
+# SLURM cluster (slurmctld/slurmd services) and waits for it to reach
+# its terminal state (requires the Yggdrasil slurm_job recipe).
+compose-scenario-slurm: ## Inject the SLURM submission scenario into a running stack
+	@curl -sf -X PUT \
+		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
+		-H 'Content-Type: application/json' \
+		--data-binary @deploy/seed/test_scenario_slurm.json \
+		"http://localhost:5984/yggdrasil_testdocs/test_scenario:slurm-$$(date +%s)" && \
+		echo "SLURM scenario injected; watch it with: make compose-logs"
 
 # Opt-in seeding of the BioMate workflow documents. Each seed keeps the
 # _id from the file (deterministic, idempotent). _id/_rev are stripped from

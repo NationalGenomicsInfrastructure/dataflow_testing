@@ -18,6 +18,9 @@
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
 #       /work volume where the dind sidecar can see them, and the page
 #       cache for that data is pre-warmed (see stage_dev_data)
+#   5c. (SLURM client, dind image only) munged is started against the
+#       shared munge key and the SLURM control plane is soft-waited on,
+#       so batch job submissions (sbatch/sacct) can authenticate
 #   6. (optional) genomics-status is reachable, when it is part of this
 #       stack (it is in the default compose stack; the wait is a soft gate
 #       - the daemon does not depend on the UI)
@@ -212,6 +215,58 @@ stage_dev_data() {
 }
 
 stage_dev_data
+
+# 5c. SLURM client setup (dind image only): the daemon's job manager
+#     shells out to sbatch/sacct, which authenticate to the stack's local
+#     SLURM cluster (slurmctld/slurmd services) with the munge key shared
+#     on the slurm-munge volume. The base image has no SLURM client and
+#     no slurm.conf, so this is skipped there. Both waits are soft gates:
+#     a missing/broken cluster must not block the daemon (the slurm_job
+#     scenario would simply fail at submission time instead).
+start_slurm_client() {
+    if [ ! -f /etc/slurm/slurm.conf ]; then
+        log "No /etc/slurm/slurm.conf; skipping SLURM client setup"
+        return 0
+    fi
+    local key=/etc/munge/munge.key waited=0
+    until [ -f "${key}" ]; do
+        sleep 2
+        waited=$((waited + 2))
+        if [ "${waited}" -ge 120 ]; then
+            log "WARNING: munge key did not appear within 120s; SLURM jobs cannot authenticate"
+            return 0
+        fi
+    done
+    # Normalize the key (it may carry a stale build-time owner until the
+    # first normalizing entrypoint runs).
+    chown root:root "${key}" 2>/dev/null || true
+    chmod 400 "${key}" 2>/dev/null || true
+    # munged 0.5.16 runtime layout (same as the SLURM services; see
+    # deploy/slurm/entrypoint-slurm-ctld.sh).
+    install -d -o root -g root -m 755 /var/run/munge
+    if [ ! -f /var/lib/munge/.seed ]; then
+        head -c 1024 /dev/urandom > /var/lib/munge/.seed
+        chown root:munge /var/lib/munge/.seed
+        chmod 440 /var/lib/munge/.seed
+    fi
+    if ! munged; then
+        log "WARNING: munged failed to start; SLURM jobs cannot authenticate"
+        return 0
+    fi
+    log "munged started"
+    waited=0
+    until scontrol ping 2>/dev/null | grep -q "is UP"; do
+        sleep 2
+        waited=$((waited + 2))
+        if [ "${waited}" -ge 300 ]; then
+            log "WARNING: slurmctld did not answer scontrol ping within 300s; continuing"
+            return 0
+        fi
+    done
+    log "SLURM control plane is ready"
+}
+
+start_slurm_client
 
 # 6. Optional UI service (in the default stack; soft gate).
 wait_for_service "genomics-status" 9761 "genomics-status" 300

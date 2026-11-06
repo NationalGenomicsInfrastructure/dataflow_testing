@@ -30,12 +30,18 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status; profile full adds biomate)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status + slurmctld + slurmd; profile full adds biomate)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
 │   ├── yggdrasil-config/main.json
 │   ├── seed/test_scenario_happy_path.json
+│   ├── seed/test_scenario_slurm.json
+│   ├── slurm/slurm.conf           # shared config of the local SLURM cluster
+│   ├── slurm/entrypoint-slurm-ctld.sh
+│   ├── slurm/entrypoint-slurmd.sh
+│   ├── Dockerfile.slurm-ctld      # SLURM controller (Debian trixie slurmctld)
+│   ├── Dockerfile.slurmd          # SLURM compute node (Debian trixie slurmd)
 │   ├── seed/flowcell_status_biomate.json
 │   ├── seed/demux_sample_info_biomate.json
 │   ├── seed/demux_sample_info/     # test-flowcell seeds, bind-mounted into statusdb
@@ -156,6 +162,24 @@ Each injection gets a unique document id, so it always executes; the initial
 on restarts (plans are tracked by `run_token`/`executed_run_token` and
 watcher checkpoints are persisted in CouchDB). Use `make compose-reset` for a
 completely fresh state.
+
+### SLURM job submission
+
+The stack runs a real single-node SLURM cluster (`slurmctld` + `slurmd`
+services; see `deploy/slurm/slurm.conf`) as a stand-in for an HPC, and the
+yggdrasil container carries the SLURM client (`sbatch`/`sacct`) plus a
+`main.json` setting of `yggdrasil.slurm.backend = "slurm"`. The
+`slurm_job` test recipe submits a batch job through Yggdrasil's
+`SlurmJobManager` and waits for its terminal state:
+
+```bash
+make compose-scenario-slurm   # PUTs a fresh test_scenario:slurm-<timestamp> doc
+```
+
+Watch the plan run with `make compose-logs` (the step records the
+`job_id` and `final_state` in its metrics); from inside the stack you can
+inspect the job the usual SLURM way, e.g.
+`docker compose exec slurmctld sacct -j <job_id>`.
 
 The demux workflow (`dmx_realm`) operates on the documents in the
 `flowcell_status` and `demux_sample_info` databases. A fresh stack is

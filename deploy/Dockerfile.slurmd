@@ -1,0 +1,38 @@
+# SLURM compute node for the dataflow-testing compose stack (the single
+# "HPC node" that runs the jobs the yggdrasil daemon submits).
+#
+# Pairs with deploy/Dockerfile.slurm-ctld: same SLURM version (Debian
+# trixie distro package) and the same shared slurm.conf / munge key
+# volume. See the header in deploy/slurm/slurm.conf.
+#
+# Built by docker compose (service "slurmd"). The ygg-work volume is
+# mounted at /work (see docker-compose.yml) so batch scripts and their
+# output are visible to both the yggdrasil container and the node.
+
+FROM debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends slurmd slurm-client munge \
+    && rm -rf /var/lib/apt/lists/* \
+    # munged (0.5.16) security layout: it requires these paths to be
+    # root-owned and the munge key to be root:root 0400 (see
+    # deploy/Dockerfile.slurm-ctld; the entrypoint handles the runtime
+    # pieces).
+    && chown root:root /etc/munge && chmod 755 /etc/munge \
+    && chown root:root /var/log/munge && chmod 700 /var/log/munge \
+    && chown root:root /var/lib/munge && chmod 755 /var/lib/munge \
+    && install -d -o slurm -g slurm -m 755 /var/spool/slurmd
+
+# Single shared cluster config (see the header in deploy/slurm/slurm.conf).
+COPY deploy/slurm/slurm.conf /etc/slurm/slurm.conf
+
+# No cgroup management in the container: there is no systemd/dbus daemon
+# to create the slurmstepd scope, and the test jobs do not need resource
+# confinement (slurm.conf already bounds the allocation via the node's
+# CPUs/RealMemory). "disabled" completely turns off the cgroup subsystem.
+RUN printf 'CgroupPlugin=disabled\n' > /etc/slurm/cgroup.conf
+
+COPY deploy/slurm/entrypoint-slurmd.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint-slurmd.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-slurmd.sh"]
