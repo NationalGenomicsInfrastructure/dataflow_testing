@@ -181,6 +181,36 @@ Watch the plan run with `make compose-logs` (the step records the
 inspect the job the usual SLURM way, e.g.
 `docker compose exec slurmctld sacct -j <job_id>`.
 
+### dmx_realm's SLURM executor (opt-in)
+
+By default `dmx_realm` runs each branch's Nextflow invocation as a
+subprocess of the yggdrasil daemon process. With `DMX_EXECUTOR=slurm` the
+realm instead submits each branch as an **sbatch job** to the stack's
+SLURM cluster — the same `SlurmJobManager` (sbatch/sacct) the
+`slurm_job` scenario uses, and the shape of a production HPC deployment:
+
+```bash
+make compose-demux-slurm                     # recreate yggdrasil with DMX_EXECUTOR=slurm
+make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6   # arm one flowcell (adds transferred_to_hpc)
+make compose-demux-local                     # back to local execution (the default)
+```
+
+The entrypoint materialises the flag as `dev_dmx_realm.json`
+(nextflow.executor=slurm; in dev mode the realm's ConfigLoader prefers
+`dev_*.json` over `dmx_realm.json`, and the file is removed again on a
+local run), and the `execute_demux` step writes the branch's batch script
+to its work directory, submits it and blocks until the job reaches a
+terminal state — `COMPLETED` is expected, anything else fails the step
+with the tail of the run log (on the shared volume). The node runs the
+**real pipeline**: `deploy/Dockerfile.slurmd` provides the JRE, a pinned
+Nextflow launcher and a static docker CLI pointing at the dind sidecar
+(container execution for `-profile docker` still happens there), and
+`NXF_HOME` lives on the shared `/work` volume, so the pipeline checkout
+and the tool images are shared with the yggdrasil container. sbatch
+resource defaults are configurable in the `nextflow` object of
+`deploy/yggdrasil-config/dmx_realm.json` (`sbatch_cpus`, `sbatch_mem`,
+`sbatch_time`, `sbatch_partition`).
+
 The demux workflow (`dmx_realm`) operates on the documents in the
 `flowcell_status` and `demux_sample_info` databases. A fresh stack is
 seeded at boot with four test flowcells per database (from

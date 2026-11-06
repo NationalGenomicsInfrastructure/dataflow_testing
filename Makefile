@@ -10,7 +10,8 @@ SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
         compose-build-yggdrasil compose-build-slurm compose-build-gs-base compose-up compose-up-full \
         compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
         compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
-        compose-scenario compose-scenario-slurm compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+        compose-scenario compose-scenario-slurm compose-demux-slurm compose-demux-local \
+        compose-seed-status compose-trigger compose-inject compose-sync-flowcell
 
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
@@ -47,6 +48,8 @@ help: ## Show this help
 	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and resume it (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-scenario-slurm    Inject the SLURM submission scenario into a running stack"
+	@echo "  compose-demux-slurm     Run dmx_realm's Nextflow runs on the SLURM node (opt-in)"
+	@echo "  compose-demux-local     Back to local execution of dmx_realm's Nextflow runs (default)"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
 	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
@@ -467,6 +470,25 @@ compose-scenario-slurm: ## Inject the SLURM submission scenario into a running s
 		--data-binary @deploy/seed/test_scenario_slurm.json \
 		"http://localhost:5984/yggdrasil_testdocs/test_scenario:slurm-$$(date +%s)" && \
 		echo "SLURM scenario injected; watch it with: make compose-logs"
+
+# dmx_realm's SLURM executor (opt-in): recreate the yggdrasil service with
+# DMX_EXECUTOR=slurm. The entrypoint materialises the flag as
+# dev_dmx_realm.json (nextflow.executor=slurm), and the realm's
+# execute_demux step then submits the branch's Nextflow run as an sbatch
+# job on the SLURM node - deploy/Dockerfile.slurmd provides Nextflow + the
+# docker CLI there, so the real pipeline runs on the node like a production
+# HPC (container execution still happens on the dind daemon).
+compose-demux-slurm: ## Run dmx_realm's Nextflow runs on the SLURM node (opt-in)
+	DMX_EXECUTOR=slurm $(COMPOSE) up -d --force-recreate yggdrasil
+	@echo "dmx_realm Nextflow runs now execute on the SLURM node"
+	@echo "Arm a flowcell with: make compose-sync-flowcell FLOWCELL_ID=<id>"
+
+# Back to the default: local execution. The entrypoint removes the
+# dev_dmx_realm.json override on (re)start, and the committed
+# dmx_realm.json (nextflow.executor=local) applies.
+compose-demux-local: ## Back to local execution of dmx_realm's Nextflow runs (default)
+	DMX_EXECUTOR=local $(COMPOSE) up -d --force-recreate yggdrasil
+	@echo "dmx_realm Nextflow runs execute locally again (default)"
 
 # Opt-in seeding of the BioMate workflow documents. Each seed keeps the
 # _id from the file (deterministic, idempotent). _id/_rev are stripped from

@@ -21,6 +21,10 @@
 #   5c. (SLURM client, dind image only) munged is started against the
 #       shared munge key and the SLURM control plane is soft-waited on,
 #       so batch job submissions (sbatch/sacct) can authenticate
+#   5d. (opt-in) DMX_EXECUTOR=slurm derives dev_dmx_realm.json from the
+#       realm's dmx_realm.json with nextflow.executor=slurm, so dmx_realm
+#       submits its Nextflow runs as sbatch jobs on the SLURM node (dev
+#       mode prefers dev_<name>.json; without the flag the file is removed)
 #   6. (optional) genomics-status is reachable, when it is part of this
 #       stack (it is in the default compose stack; the wait is a soft gate
 #       - the daemon does not depend on the UI)
@@ -267,6 +271,43 @@ start_slurm_client() {
 }
 
 start_slurm_client
+
+# 5d. Opt-in realm executor: DMX_EXECUTOR=slurm makes dmx_realm submit its
+#     Nextflow runs as sbatch jobs on the SLURM node (like a production
+#     HPC) instead of running them as a subprocess of the daemon. The
+#     daemon runs in dev mode, and in dev mode the realm's ConfigLoader
+#     prefers dev_dmx_realm.json over dmx_realm.json - so we derive that
+#     file here from the committed config with nextflow.executor=slurm.
+#     Without the flag the file is removed, and the committed config
+#     (executor=local, the default) applies.
+apply_dmx_executor() {
+    local cfg_dir="/app/yggdrasil_workspace/common/configurations"
+    local out="${cfg_dir}/dev_dmx_realm.json"
+    if [ "${DMX_EXECUTOR:-local}" != "slurm" ]; then
+        rm -f "${out}"
+        log "DMX_EXECUTOR=${DMX_EXECUTOR:-local}; Nextflow runs execute locally (no ${out##*/})"
+        return 0
+    fi
+    if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
+        log "WARNING: DMX_EXECUTOR=slurm but ${cfg_dir}/dmx_realm.json is missing; keeping local execution"
+        rm -f "${out}"
+        return 0
+    fi
+    python3 - "${cfg_dir}" <<'PYEOF'
+import json
+import pathlib
+import sys
+
+cfg_dir = pathlib.Path(sys.argv[1])
+data = json.loads((cfg_dir / "dmx_realm.json").read_text())
+data.setdefault("nextflow", {})["executor"] = "slurm"
+out = cfg_dir / "dev_dmx_realm.json"
+out.write_text(json.dumps(data, indent=2) + "\n")
+PYEOF
+    log "DMX_EXECUTOR=slurm; wrote ${out} (nextflow.executor=slurm)"
+}
+
+apply_dmx_executor
 
 # 6. Optional UI service (in the default stack; soft gate).
 wait_for_service "genomics-status" 9761 "genomics-status" 300

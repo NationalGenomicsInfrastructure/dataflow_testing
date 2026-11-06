@@ -135,6 +135,11 @@ services:
       OPS_DB: yggdrasil_ops
       YGG_INJECT_TEST_SCENARIO: ${YGG_INJECT_TEST_SCENARIO:-true}
       YGG_SCENARIO_ID: ${YGG_SCENARIO_ID:-test_scenario:compose-demo}
+      # Where the dmx_realm Nextflow runs execute: "local" (default, a
+      # subprocess of the daemon) or "slurm" (sbatch job on the SLURM
+      # node, like a production HPC). The entrypoint materialises the
+      # choice as dev_dmx_realm.json (see deploy/yggdrasil-entrypoint.sh).
+      DMX_EXECUTOR: ${DMX_EXECUTOR:-local}
       # Put Nextflow's home (pipeline asset clones + caches) on the shared
       # ygg-work volume: the dind sidecar mounts the same volume at /work,
       # and nested pipeline containers bind-mount repo-internal files
@@ -162,11 +167,12 @@ services:
       - ./demux_realm:/app/demux_realm
       # Same pattern for the configuration directory: host edits to
       # main.json / dmx_realm.json are picked up on container (re)start
-      # without rebuilding the image. :ro — the daemon only reads from
-      # here. The image-baked copy remains as fallback for image-only
-      # deployments. (The daemon caches configs per process, so a
-      # container restart is still required to see host edits.)
-      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations:ro
+      # without rebuilding the image. Not :ro - the entrypoint writes
+      # dev_dmx_realm.json there to switch the realm's Nextflow executor
+      # (DMX_EXECUTOR=slurm). The image-baked copy remains as fallback
+      # for image-only deployments. (The daemon caches configs per
+      # process, so a container restart is still required to see edits.)
+      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil

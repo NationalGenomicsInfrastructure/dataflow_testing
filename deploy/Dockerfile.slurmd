@@ -5,6 +5,15 @@
 # trixie distro package) and the same shared slurm.conf / munge key
 # volume. See the header in deploy/slurm/slurm.conf.
 #
+# With the realm's SLURM executor (deploy/yggdrasil-config/dmx_realm.json,
+# nextflow.executor=slurm; opt-in via DMX_EXECUTOR=slurm), the branch's
+# Nextflow run executes HERE, like on a production HPC: JRE + a pinned
+# Nextflow launcher, and a static Docker CLI that talks to the compose
+# "dind" sidecar daemon (reachable from every container on the stack's
+# network) - container execution for -profile docker still happens there,
+# and NXF_HOME lives on the shared /work volume so the pipeline checkout
+# is shared with the yggdrasil container.
+#
 # Built by docker compose (service "slurmd"). The ygg-work volume is
 # mounted at /work (see docker-compose.yml) so batch scripts and their
 # output are visible to both the yggdrasil container and the node.
@@ -22,6 +31,47 @@ RUN apt-get update \
     && chown root:root /var/log/munge && chmod 700 /var/log/munge \
     && chown root:root /var/lib/munge && chmod 755 /var/lib/munge \
     && install -d -o slurm -g slurm -m 755 /var/spool/slurmd
+
+# JVM (Nextflow) + git (pipeline pulls) + static Docker CLI (client for
+# the DinD sidecar daemon; pinned for reproducibility, arch-aware) - see
+# deploy/Dockerfile.yggdrasil.dind for the same setup on the daemon side.
+# bash: the SLURM batch scripts (#!/bin/bash) and the Nextflow launcher
+# need it (trixie-slim ships dash only).
+# Trixie base image: openjdk-17 is gone, use 21.
+ARG NEXTFLOW_VERSION=26.10.0
+ARG DOCKER_CLI_VERSION=27.5.1
+ARG TARGETARCH
+ENV NEXTFLOW_HOME=/opt/nf_home \
+    NXF_HOME=/work/nf-nxf \
+    DOCKER_HOST=tcp://dind:2375 \
+    # Same value (incl. the single quotes) as the yggdrasil service's
+    # NXF_OPTS in docker-compose.yml: the launcher word-splits the value,
+    # and without the quotes the "linux/amd64" part is misread as a JVM
+    # main class and every nextflow invocation fails.
+    NXF_OPTS="-Ddocker.run.args='--platform linux/amd64'" \
+    PATH=/opt/nextflow:$PATH
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash openjdk-21-jre-headless git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "${TARGETARCH:-amd64}" in aarch64) arch=aarch64 ;; *) arch=x86_64 ;; esac \
+    && curl -fsSL -o /tmp/docker.tgz \
+        "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz" \
+    && tar xzf /tmp/docker.tgz -C /tmp \
+    && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz \
+    && mkdir -p /opt/nextflow /opt/nf_home \
+    && curl -fsSL -o /opt/nextflow/nextflow \
+        "https://github.com/nextflow-io/nextflow/releases/download/v${NEXTFLOW_VERSION}/nextflow" \
+    && chmod +x /opt/nextflow/nextflow \
+    # First run downloads the platform jar into the (pre-created) home;
+    # keep the build check away from the runtime NXF_HOME (the shared
+    # /work volume is not present at build time).
+    && NEXTFLOW_HOME=/opt/nf_home NXF_HOME=/opt/nf_home nextflow -version
+
+# NXF_HOME on the shared work volume (set above): the pipeline checkout
+# (and the Docker images it pulls via the dind daemon) are shared with the
+# yggdrasil container, which uses the same NXF_HOME.
 
 # Single shared cluster config (see the header in deploy/slurm/slurm.conf).
 COPY deploy/slurm/slurm.conf /etc/slurm/slurm.conf
