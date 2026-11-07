@@ -307,7 +307,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "GCTACGCT",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -357,7 +357,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "CGAGGCTG",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -407,7 +407,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "AAGAGGCA",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -461,7 +461,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TTACCGAC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -511,7 +511,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "AGTGACCT",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -561,7 +561,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TCGGATTC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -611,7 +611,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "CAAGGTAC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -661,7 +661,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TCCTCATG",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -715,7 +715,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "GCGCGGTTAA",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -765,7 +765,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TTCCTTGAGG",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -815,7 +815,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TCAGCGAA",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -865,7 +865,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "CCATTGTT",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -919,7 +919,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TTACCGAC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -969,7 +969,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "AGTGACCT",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -1019,7 +1019,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TCGGATTC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -1069,7 +1069,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "CAAGGTAC",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
@@ -1119,7 +1119,7 @@
             "settings": {
               "2026-03-10T16:00:00.000+00:00": {
                 "other_details": {
-                  "named_index": "TCCTCATG",
+                  "named_index": "",
                   "operator": "John_Doe",
                   "recipe": "151-10-0-151",
                   "sample_ref": "Human (Homo sapiens GRCh38)",
