@@ -126,6 +126,11 @@ services:
     # runtime image. Plain `docker compose up` therefore assumes the
     # images exist - use `make compose-up`.
     image: dataflow-yggdrasil-dind:latest
+    # The daemon stops gracefully on SIGTERM (cli.py routes it to the same
+    # shutdown path as Ctrl+C), but its stop can take a few seconds (in-flight
+    # CouchDB changes polls, plan drain). Give it headroom beyond the 10 s
+    # default so a stop ends with exit 0 instead of a SIGKILL (exit 137).
+    stop_grace_period: "30s"
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
       YGG_COUCH_PASS: ${STACK_COUCH_PASSWORD:-secret}
