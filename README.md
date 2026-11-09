@@ -211,6 +211,25 @@ resource defaults are configurable in the `nextflow` object of
 `deploy/yggdrasil-config/dmx_realm.json` (`sbatch_cpus`, `sbatch_mem`,
 `sbatch_time`, `sbatch_partition`).
 
+While the plan runs, the usual SLURM tools apply, and the per-branch
+script and log live on the shared volume under the plan directory:
+
+```bash
+docker compose exec slurmctld squeue                        # dmx-<fcid>-lane_N_settings_I
+docker compose exec yggdrasil sacct -n -X -o JobID,JobName,State
+ls /work/dmx_realm:<FCID>:demux/lane_*__execute_demux/      # nextflow_slurm.sh + nextflow_run.log
+```
+
+On a fresh stack the first run also git-fetches the pipeline and pulls
+the tool images into the dind daemon (one-time, ~3 GB); later runs reuse
+them. From a completely clean state:
+
+```bash
+make compose-reset
+DMX_EXECUTOR=slurm make compose-up
+make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6
+```
+
 The demux workflow (`dmx_realm`) operates on the documents in the
 `flowcell_status` and `demux_sample_info` databases. A fresh stack is
 seeded at boot with four test flowcells per database (from
