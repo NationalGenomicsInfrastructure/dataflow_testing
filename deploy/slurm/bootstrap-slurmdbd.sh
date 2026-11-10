@@ -2,10 +2,14 @@
 # One-shot bootstrap for the slurmdbd accounting database
 # (slurmdbd-bootstrap compose service).
 #
-# SLURM 24.11 has no AutoCreate: the cluster record and the root admin
-# user (plus their association with the local partition) must be created
-# explicitly. sacctmgr -i treats "already exists" as a success, so this
-# script is idempotent and re-runs harmlessly on every stack (re)start.
+# SLURM 24.11 has no AutoCreate, but registering a cluster with
+# `sacctmgr add cluster` also creates its "root" account, the "root"
+# admin user and their cluster-wide association (the DB transaction log
+# shows all of it as a side effect of the single Add Clusters record) -
+# so the cluster registration is the whole bootstrap. Idempotency is by
+# state check, not by -i: in 24.11 `sacctmgr add cluster` (with or
+# without -i) exits 1 when the cluster already exists, so the script
+# checks first and re-runs harmlessly on every stack (re)start.
 #
 # Runs as root, so it reads the root-owned munge key like the other
 # SLURM-aware processes in the stack.
@@ -44,9 +48,14 @@ until sacctmgr show clusters >/dev/null 2>&1; do
 done
 echo "[slurmdbd-bootstrap] slurmdbd is reachable"
 
-sacctmgr -i add cluster name=dataflow
-sacctmgr -i add account name=root cluster=dataflow
-sacctmgr -i add user name=root cluster=dataflow account=root adminlevel=admin
-sacctmgr -i add association cluster=dataflow account=root user=root partition=local qos=normal
+# Note for 24.11: `sacctmgr add association` no longer exists (the man
+# page restricts the association entity to list/show; associations are
+# managed through the user/account/cluster entities), so no association
+# step is needed here.
+if sacctmgr show clusters 2>/dev/null | grep -qw dataflow; then
+    echo "[slurmdbd-bootstrap] cluster dataflow already registered"
+else
+    sacctmgr add cluster name=dataflow
+fi
 
 echo "[slurmdbd-bootstrap] bootstrap complete"

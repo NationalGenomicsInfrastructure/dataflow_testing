@@ -299,9 +299,10 @@ services:
       - yggdrasil-net
 
   # One-shot accounting bootstrap (SLURM 24.11 has no AutoCreate):
-  # creates the cluster record, the root admin user and its association
-  # with the local partition. Idempotent (sacctmgr -i), exits 0 on
-  # success; compose leaves it finished.
+  # registers the cluster; 24.11's cluster registration also creates the
+  # root account, the root admin user and their association (see
+  # deploy/slurm/bootstrap-slurmdbd.sh). Idempotent (checks state before
+  # adding), exits 0 on success; compose leaves it finished.
   slurmdbd-bootstrap:
     image: dataflow-slurmdbd:latest
     entrypoint: ["/usr/local/bin/bootstrap-slurmdbd.sh"]
