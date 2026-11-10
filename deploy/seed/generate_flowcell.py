@@ -443,7 +443,7 @@ def build_demux_from_dir(run_dir, template, m, rng):
                 "RunName": fcid,
                 "Date": today,
             },
-            "raw_samplesheet_settings": dict(rs),
+            "BCLConvert_Settings": dict(rs),
             "BCLConvert_Data": bcd,
         }
 
