@@ -127,10 +127,12 @@ services:
     # images exist - use `make compose-up`.
     image: dataflow-yggdrasil-dind:latest
     # The daemon stops gracefully on SIGTERM (cli.py routes it to the same
-    # shutdown path as Ctrl+C), but its stop can take a few seconds (in-flight
-    # CouchDB changes polls, plan drain). Give it headroom beyond the 10 s
-    # default so a stop ends with exit 0 instead of a SIGKILL (exit 137).
-    stop_grace_period: "30s"
+    # shutdown path as Ctrl+C), but its stop waits for in-flight CouchDB
+    # changes polls (uncancellable threads) and the plan drain. The PlanWatcher
+    # longpoll holds up to 60 s (ChangesFetcher default) plus a 5 s socket
+    # margin, so give it headroom beyond that: a stop then ends with exit 0
+    # instead of a SIGKILL (exit 137).
+    stop_grace_period: "70s"
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
       YGG_COUCH_PASS: ${STACK_COUCH_PASSWORD:-secret}
