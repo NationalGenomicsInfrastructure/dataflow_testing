@@ -14,6 +14,9 @@
 # and NXF_HOME lives on the shared /work volume so the pipeline checkout
 # is shared with the yggdrasil container.
 #
+# The realm's batch script sets up no environment itself: NXF_HOME,
+# DOCKER_HOST and Nextflow on PATH (the ENV below) are this image's job.
+#
 # Built by docker compose (service "slurmd"). The ygg-work volume is
 # mounted at /work (see docker-compose.yml) so batch scripts and their
 # output are visible to both the yggdrasil container and the node.

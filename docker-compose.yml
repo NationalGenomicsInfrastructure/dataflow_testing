@@ -358,6 +358,11 @@ services:
     depends_on:
       slurmctld:
         condition: service_healthy
+      # Batch jobs run Nextflow with -profile docker against the dind
+      # daemon (DOCKER_HOST in deploy/Dockerfile.slurmd); the realm's
+      # batch script does not wait for it.
+      dind:
+        condition: service_healthy
     volumes:
       - slurm-munge:/etc/munge
       # Shared job workspace: the yggdrasil container writes the batch

@@ -11,9 +11,9 @@
 #   2. the seeded `projects` database exists
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
-#   4b. the daemon's configuration files exist under /app (main.json is
-#       fatal; a missing dmx_realm.json is a loud warning, since the realm
-#       would otherwise fall back to its built-in defaults silently)
+#   4b. the daemon's configuration files exist under /app (main.json and
+#       dmx_realm.json are both fatal: the realm has no built-in defaults
+#       for its deployment-specific keys)
 #   5. (optional) a test scenario document is injected into the stack
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
 #       /work volume where the dind sidecar can see them, and the page
@@ -145,17 +145,18 @@ inject_scenario() {
 }
 
 verify_configs() {
-    # main.json is fatal: without it the daemon has no CouchDB connections
-    # at all. dmx_realm.json is not fatal: dmx_realm falls back to built-in
-    # defaults when it is missing (work_base=/work/nf-realm-work, no -c
-    # common_config, no skip_tools) - make that loud instead of silent.
+    # Both are fatal: without main.json the daemon has no CouchDB
+    # connections at all, and dmx_realm has no defaults for its
+    # deployment-specific keys (nextflow.profile, work_base, outdir_base),
+    # so every demux plan would fail without dmx_realm.json.
     local cfg_dir="/app/yggdrasil_workspace/common/configurations"
     if [ ! -f "${cfg_dir}/main.json" ]; then
         log "ERROR: ${cfg_dir}/main.json is missing; the daemon cannot run without it"
         return 1
     fi
     if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
-        log "WARNING: ${cfg_dir}/dmx_realm.json is missing; dmx_realm will run with built-in defaults (work_base=/work/nf-realm-work, no -c common_config, no skip_tools). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+        log "ERROR: ${cfg_dir}/dmx_realm.json is missing; dmx_realm requires it (nextflow.profile, work_base, outdir_base). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+        return 1
     fi
 }
 
