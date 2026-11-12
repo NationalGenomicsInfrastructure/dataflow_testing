@@ -209,7 +209,8 @@ Nextflow launcher and a static docker CLI pointing at the dind sidecar
 and the tool images are shared with the yggdrasil container. sbatch
 resource defaults are configurable in the `nextflow` object of
 `deploy/yggdrasil-config/dmx_realm.json` (`sbatch_cpus`, `sbatch_time`,
-`sbatch_partition`); memory is fixed at `4G`.
+`sbatch_partition`); no `--mem` is requested, so the cluster's default
+memory applies.
 
 While the plan runs, the usual SLURM tools apply, and the per-branch
 script and log live on the shared volume under the plan directory:
