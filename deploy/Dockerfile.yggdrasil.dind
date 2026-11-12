@@ -1,7 +1,9 @@
 # The yggdrasil image for the compose stack: the base image plus a JVM, a
-# pinned Nextflow launcher and a static Docker CLI client that talks to
+# pinned Nextflow launcher, a static Docker CLI client that talks to
 # the compose "dind" sidecar (docker:dind), so nf-core pipelines (e.g.
-# nf-core/demultiplex) can run with -profile docker (docker-in-docker).
+# nf-core/demultiplex) can run with -profile docker (docker-in-docker),
+# and the SLURM client (sbatch/sacct) used to submit batch jobs to the
+# stack's local single-node SLURM cluster (slurmctld/slurmd services).
 #
 # Build order (see Makefile target `compose-build-yggdrasil`):
 #   docker build -f deploy/Dockerfile.yggdrasil      -t dataflow-yggdrasil:latest       .
@@ -37,6 +39,20 @@ RUN mkdir -p /opt/nextflow /opt/nf_home \
         "https://github.com/nextflow-io/nextflow/releases/download/v${NEXTFLOW_VERSION}/nextflow" \
     && chmod +x /opt/nextflow/nextflow \
     && nextflow -version
+
+# SLURM client for the local cluster (slurmctld/slurmd compose services,
+# deploy/Dockerfile.slurm-ctld / .slurmd). Same Debian trixie package as
+# the server images, so client and controller run identical versions.
+# munged requires a root-owned munge layout (key root:root 0400 on the
+# shared slurm-munge volume, mounted at /etc/munge); the entrypoint
+# starts munged at boot (deploy/yggdrasil-entrypoint.sh).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends slurm-client slurm-wlm-basic-plugins munge \
+    && rm -rf /var/lib/apt/lists/* \
+    && chown root:root /etc/munge && chmod 755 /etc/munge \
+    && chown root:root /var/log/munge && chmod 700 /var/log/munge \
+    && chown root:root /var/lib/munge && chmod 755 /var/lib/munge
+COPY deploy/slurm/slurm.conf /etc/slurm/slurm.conf
 
 # Laptop-sized resource overrides for the realm's pipeline runs. The
 # entrypoint copies it to /work/demultiplex_local.config on the shared

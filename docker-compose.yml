@@ -3,7 +3,8 @@
 #   make compose-up        # statusdb + yggdrasil + genomics-status
 #                          # (yggdrasil runs the dind-flavoured image with a
 #                          # docker:dind sidecar, so it can run nf-core
-#                          # pipelines)
+#                          # pipelines; slurmctld + slurmd provide a local
+#                          # single-node SLURM cluster for job submission)
 #   make compose-up-full   # the above + biomate (--profile full)
 #   make compose-rebuild   # rebuild all images without cache (recreate containers)
 #   make compose-logs      # follow yggdrasil logs
@@ -125,6 +126,13 @@ services:
     # runtime image. Plain `docker compose up` therefore assumes the
     # images exist - use `make compose-up`.
     image: dataflow-yggdrasil-dind:latest
+    # The daemon stops gracefully on SIGTERM (cli.py routes it to the same
+    # shutdown path as Ctrl+C), but its stop waits for in-flight CouchDB
+    # changes polls (uncancellable threads) and the plan drain. The PlanWatcher
+    # longpoll holds up to 60 s (ChangesFetcher default) plus a 5 s socket
+    # margin, so give it headroom beyond that: a stop then ends with exit 0
+    # instead of a SIGKILL (exit 137).
+    stop_grace_period: "70s"
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
       YGG_COUCH_PASS: ${STACK_COUCH_PASSWORD:-secret}
@@ -134,6 +142,11 @@ services:
       OPS_DB: yggdrasil_ops
       YGG_INJECT_TEST_SCENARIO: ${YGG_INJECT_TEST_SCENARIO:-true}
       YGG_SCENARIO_ID: ${YGG_SCENARIO_ID:-test_scenario:compose-demo}
+      # Where the dmx_realm Nextflow runs execute: "local" (default, a
+      # subprocess of the daemon) or "slurm" (sbatch job on the SLURM
+      # node, like a production HPC). The entrypoint materialises the
+      # choice as dev_dmx_realm.json (see deploy/yggdrasil-entrypoint.sh).
+      DMX_EXECUTOR: ${DMX_EXECUTOR:-local}
       # Put Nextflow's home (pipeline asset clones + caches) on the shared
       # ygg-work volume: the dind sidecar mounts the same volume at /work,
       # and nested pipeline containers bind-mount repo-internal files
@@ -161,14 +174,20 @@ services:
       - ./demux_realm:/app/demux_realm
       # Same pattern for the configuration directory: host edits to
       # main.json / dmx_realm.json are picked up on container (re)start
-      # without rebuilding the image. :ro — the daemon only reads from
-      # here. The image-baked copy remains as fallback for image-only
-      # deployments. (The daemon caches configs per process, so a
-      # container restart is still required to see host edits.)
-      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations:ro
+      # without rebuilding the image. Not :ro - the entrypoint writes
+      # dev_dmx_realm.json there to switch the realm's Nextflow executor
+      # (DMX_EXECUTOR=slurm). The image-baked copy remains as fallback
+      # for image-only deployments. (The daemon caches configs per
+      # process, so a container restart is still required to see edits.)
+      - ./deploy/yggdrasil-config:/app/yggdrasil_workspace/common/configurations
       - ygg-work:/work
       - ygg-events:/events
       - ygg-logs:/logs/yggdrasil
+      # The SLURM cluster's munge key (the slurm-munge volume, mounted at
+      # /etc/munge and shared with the slurmctld/slurmd services): the
+      # daemon's sbatch/sacct calls authenticate with it (the dind image
+      # installs the SLURM client; see deploy/Dockerfile.yggdrasil.dind).
+      - slurm-munge:/etc/munge
       # Tiny Illumina BCL run for nf-core/demultiplex test runs (the
       # dmx_realm demux workflow; see the README "Firing more work").
       - ./BioMate/temp:/data/test_run:ro
@@ -186,6 +205,14 @@ services:
       # Awaited: the daemon and the realm talk to the dind daemon via
       # DOCKER_HOST=tcp://dind:2375 (baked into the dind image).
       dind:
+        condition: service_healthy
+      # The local SLURM cluster: the entrypoint waits for the munge key
+      # these containers share, and the slurm_job test scenario submits
+      # batch jobs to this node (hard gate: without it every SLURM
+      # submission in the stack would fail to authenticate).
+      slurmctld:
+        condition: service_healthy
+      slurmd:
         condition: service_healthy
     networks:
       - yggdrasil-net
@@ -227,6 +254,133 @@ services:
     networks:
       - yggdrasil-net
 
+  # MariaDB backend for slurmdbd (the SLURM accounting database). Real HPCs
+  # run slurmctld + slurmdbd + a database; without accounting storage
+  # sacct is disabled, and Yggdrasil's SlurmJobManager polls sacct.
+  slurmdbd-db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: secret
+      MARIADB_DATABASE: slurm
+      MARIADB_USER: slurm
+      MARIADB_PASSWORD: secret
+    volumes:
+      - slurmdbd-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - yggdrasil-net
+
+  # SLURM accounting daemon (see deploy/Dockerfile.slurmdbd and
+  # deploy/slurm/slurmdbd.conf). The cluster/user bootstrap is done by
+  # the slurmdbd-bootstrap service (24.11 has no AutoCreate).
+  slurmdbd:
+    image: dataflow-slurmdbd:latest
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.slurmdbd
+    hostname: slurmdbd
+    depends_on:
+      slurmdbd-db:
+        condition: service_healthy
+    volumes:
+      - slurm-munge:/etc/munge
+    healthcheck:
+      # Ready once slurmdbd answers its clients: sacctmgr (installed in
+      # the image) lists the registered clusters from the database.
+      test: ["CMD-SHELL", "sacctmgr show clusters >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - yggdrasil-net
+
+  # One-shot accounting bootstrap (SLURM 24.11 has no AutoCreate):
+  # registers the cluster; 24.11's cluster registration also creates the
+  # root account, the root admin user and their association (see
+  # deploy/slurm/bootstrap-slurmdbd.sh). Idempotent (checks state before
+  # adding), exits 0 on success; compose leaves it finished.
+  slurmdbd-bootstrap:
+    image: dataflow-slurmdbd:latest
+    entrypoint: ["/usr/local/bin/bootstrap-slurmdbd.sh"]
+    depends_on:
+      slurmdbd:
+        condition: service_healthy
+    volumes:
+      # The shared munge key: the script starts munged with it so
+      # sacctmgr can authenticate to slurmdbd.
+      - slurm-munge:/etc/munge
+    restart: "no"
+    networks:
+      - yggdrasil-net
+
+  # Single-node SLURM cluster (controller + one compute node): a stand-in
+  # for the HPC, so the yggdrasil daemon can submit real batch jobs to
+  # SLURM on the local machine. Real SLURM (Debian trixie package), munge
+  # auth, nothing leaves the compose network. See deploy/slurm/slurm.conf
+  # and deploy/Dockerfile.slurm-ctld / .slurmd.
+  slurmctld:
+    image: dataflow-slurmctld:latest
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.slurm-ctld
+    hostname: slurmctld
+    depends_on:
+      slurmdbd:
+        condition: service_healthy
+    volumes:
+      # The cluster's munge key (the volume is mounted at /etc/munge, which
+      # holds the key in the Debian munge package layout). This container
+      # starts first in the stack, so its entrypoint is the key authority;
+      # slurmd and yggdrasil read the same key from the same volume.
+      - slurm-munge:/etc/munge
+      # Controller state (saved job state + accounting): persists across
+      # container (re)creations so job IDs stay valid.
+      - slurm-state:/var/spool/slurmctld
+    healthcheck:
+      test: ["CMD-SHELL", "scontrol ping 2>/dev/null | grep -q 'is UP'"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - yggdrasil-net
+
+  slurmd:
+    image: dataflow-slurmd:latest
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.slurmd
+    hostname: slurmd
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+      # Batch jobs run Nextflow with -profile docker against the dind
+      # daemon (DOCKER_HOST in deploy/Dockerfile.slurmd); the realm's
+      # batch script does not wait for it.
+      dind:
+        condition: service_healthy
+    volumes:
+      - slurm-munge:/etc/munge
+      # Shared job workspace: the yggdrasil container writes the batch
+      # scripts there and the node executes them there.
+      - ygg-work:/work
+    healthcheck:
+      # Ready once the node has registered with the controller and
+      # reports the idle state.
+      test: ["CMD-SHELL", "test \"$(sinfo -h -n slurmd -o %t 2>/dev/null)\" = idle"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - yggdrasil-net
+
 networks:
   yggdrasil-net:
 
@@ -236,3 +390,9 @@ volumes:
   ygg-events:
   ygg-logs:
   dind-data:
+  # SLURM cluster: the shared munge key (mounted at /etc/munge in the
+  # slurmctld, slurmd, slurmdbd and yggdrasil containers), the controller
+  # state, and the slurmdbd MariaDB data.
+  slurm-munge:
+  slurm-state:
+  slurmdbd-data:

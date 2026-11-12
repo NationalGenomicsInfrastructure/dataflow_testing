@@ -11,13 +11,20 @@
 #   2. the seeded `projects` database exists
 #   3. the yggdrasil / yggdrasil_plans / yggdrasil_ops databases exist
 #   4. the demux_sample_info / flowcell_status databases exist (dmx_realm)
-#   4b. the daemon's configuration files exist under /app (main.json is
-#       fatal; a missing dmx_realm.json is a loud warning, since the realm
-#       would otherwise fall back to its built-in defaults silently)
+#   4b. the daemon's configuration files exist under /app (main.json and
+#       dmx_realm.json are both fatal: the realm has no built-in defaults
+#       for its deployment-specific keys)
 #   5. (optional) a test scenario document is injected into the stack
 #   5b. (dev data) the zip-baked flowcells are staged onto the shared
 #       /work volume where the dind sidecar can see them, and the page
 #       cache for that data is pre-warmed (see stage_dev_data)
+#   5c. (SLURM client, dind image only) munged is started against the
+#       shared munge key and the SLURM control plane is soft-waited on,
+#       so batch job submissions (sbatch/sacct) can authenticate
+#   5d. (opt-in) DMX_EXECUTOR=slurm derives dev_dmx_realm.json from the
+#       realm's dmx_realm.json with nextflow.executor=slurm, so dmx_realm
+#       submits its Nextflow runs as sbatch jobs on the SLURM node (dev
+#       mode prefers dev_<name>.json; without the flag the file is removed)
 #   6. (optional) genomics-status is reachable, when it is part of this
 #       stack (it is in the default compose stack; the wait is a soft gate
 #       - the daemon does not depend on the UI)
@@ -138,17 +145,18 @@ inject_scenario() {
 }
 
 verify_configs() {
-    # main.json is fatal: without it the daemon has no CouchDB connections
-    # at all. dmx_realm.json is not fatal: dmx_realm falls back to built-in
-    # defaults when it is missing (work_base=/work/nf-realm-work, no -c
-    # common_config, no skip_tools) - make that loud instead of silent.
+    # Both are fatal: without main.json the daemon has no CouchDB
+    # connections at all, and dmx_realm has no defaults for its
+    # deployment-specific keys (nextflow.profile, work_base, outdir_base),
+    # so every demux plan would fail without dmx_realm.json.
     local cfg_dir="/app/yggdrasil_workspace/common/configurations"
     if [ ! -f "${cfg_dir}/main.json" ]; then
         log "ERROR: ${cfg_dir}/main.json is missing; the daemon cannot run without it"
         return 1
     fi
     if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
-        log "WARNING: ${cfg_dir}/dmx_realm.json is missing; dmx_realm will run with built-in defaults (work_base=/work/nf-realm-work, no -c common_config, no skip_tools). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+        log "ERROR: ${cfg_dir}/dmx_realm.json is missing; dmx_realm requires it (nextflow.profile, work_base, outdir_base). Rebuild the image (make compose-build-yggdrasil) or restore the file."
+        return 1
     fi
 }
 
@@ -212,6 +220,95 @@ stage_dev_data() {
 }
 
 stage_dev_data
+
+# 5c. SLURM client setup (dind image only): the daemon's job manager
+#     shells out to sbatch/sacct, which authenticate to the stack's local
+#     SLURM cluster (slurmctld/slurmd services) with the munge key shared
+#     on the slurm-munge volume. The base image has no SLURM client and
+#     no slurm.conf, so this is skipped there. Both waits are soft gates:
+#     a missing/broken cluster must not block the daemon (the slurm_job
+#     scenario would simply fail at submission time instead).
+start_slurm_client() {
+    if [ ! -f /etc/slurm/slurm.conf ]; then
+        log "No /etc/slurm/slurm.conf; skipping SLURM client setup"
+        return 0
+    fi
+    local key=/etc/munge/munge.key waited=0
+    until [ -f "${key}" ]; do
+        sleep 2
+        waited=$((waited + 2))
+        if [ "${waited}" -ge 120 ]; then
+            log "WARNING: munge key did not appear within 120s; SLURM jobs cannot authenticate"
+            return 0
+        fi
+    done
+    # Normalize the key (it may carry a stale build-time owner until the
+    # first normalizing entrypoint runs).
+    chown root:root "${key}" 2>/dev/null || true
+    chmod 400 "${key}" 2>/dev/null || true
+    # munged 0.5.16 runtime layout (same as the SLURM services; see
+    # deploy/slurm/entrypoint-slurm-ctld.sh).
+    install -d -o root -g root -m 755 /var/run/munge
+    if [ ! -f /var/lib/munge/.seed ]; then
+        head -c 1024 /dev/urandom > /var/lib/munge/.seed
+        chown root:munge /var/lib/munge/.seed
+        chmod 440 /var/lib/munge/.seed
+    fi
+    if ! munged; then
+        log "WARNING: munged failed to start; SLURM jobs cannot authenticate"
+        return 0
+    fi
+    log "munged started"
+    waited=0
+    until scontrol ping 2>/dev/null | grep -q "is UP"; do
+        sleep 2
+        waited=$((waited + 2))
+        if [ "${waited}" -ge 300 ]; then
+            log "WARNING: slurmctld did not answer scontrol ping within 300s; continuing"
+            return 0
+        fi
+    done
+    log "SLURM control plane is ready"
+}
+
+start_slurm_client
+
+# 5d. Opt-in realm executor: DMX_EXECUTOR=slurm makes dmx_realm submit its
+#     Nextflow runs as sbatch jobs on the SLURM node (like a production
+#     HPC) instead of running them as a subprocess of the daemon. The
+#     daemon runs in dev mode, and in dev mode the realm's ConfigLoader
+#     prefers dev_dmx_realm.json over dmx_realm.json - so we derive that
+#     file here from the committed config with nextflow.executor=slurm.
+#     Without the flag the file is removed, and the committed config
+#     (executor=local, the default) applies.
+apply_dmx_executor() {
+    local cfg_dir="/app/yggdrasil_workspace/common/configurations"
+    local out="${cfg_dir}/dev_dmx_realm.json"
+    if [ "${DMX_EXECUTOR:-local}" != "slurm" ]; then
+        rm -f "${out}"
+        log "DMX_EXECUTOR=${DMX_EXECUTOR:-local}; Nextflow runs execute locally (no ${out##*/})"
+        return 0
+    fi
+    if [ ! -f "${cfg_dir}/dmx_realm.json" ]; then
+        log "WARNING: DMX_EXECUTOR=slurm but ${cfg_dir}/dmx_realm.json is missing; keeping local execution"
+        rm -f "${out}"
+        return 0
+    fi
+    python3 - "${cfg_dir}" <<'PYEOF'
+import json
+import pathlib
+import sys
+
+cfg_dir = pathlib.Path(sys.argv[1])
+data = json.loads((cfg_dir / "dmx_realm.json").read_text())
+data.setdefault("nextflow", {})["executor"] = "slurm"
+out = cfg_dir / "dev_dmx_realm.json"
+out.write_text(json.dumps(data, indent=2) + "\n")
+PYEOF
+    log "DMX_EXECUTOR=slurm; wrote ${out} (nextflow.executor=slurm)"
+}
+
+apply_dmx_executor
 
 # 6. Optional UI service (in the default stack; soft gate).
 wait_for_service "genomics-status" 9761 "genomics-status" 300

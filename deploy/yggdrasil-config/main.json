@@ -2,7 +2,10 @@
     "yggdrasil": {
         "log_dir": "/logs/yggdrasil",
         "job_monitor_poll_interval": 60,
-        "plan_watcher_poll_interval": 5
+        "plan_watcher_poll_interval": 5,
+        "slurm": {
+            "backend": "slurm"
+        }
     },
     "external_systems": {
         "endpoints": {

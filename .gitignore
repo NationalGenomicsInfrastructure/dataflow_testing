@@ -226,3 +226,7 @@ __marimo__/
 # Temporary directories
 tmp/
 BioMate/temp/
+
+# Entry-point-generated dev config override (DMX_EXECUTOR=slurm; see
+# deploy/yggdrasil-entrypoint.sh step 5d) - local only, never committed.
+deploy/yggdrasil-config/dev_dmx_realm.json

@@ -1,0 +1,6 @@
+{
+    "type": "ygg_test_scenario",
+    "name": "Local SLURM submission scenario",
+    "recipe": "slurm_job",
+    "auto_run": true
+}

@@ -1,0 +1,37 @@
+# SLURM controller for the dataflow-testing compose stack: a real
+# single-node SLURM cluster (this container + the slurmd node container),
+# so the yggdrasil daemon can submit batch jobs to SLURM exactly as it
+# would on an HPC - everything confined to the compose network.
+#
+# The slurmctld and slurmd images must use the same SLURM version (here:
+# the Debian trixie distro package, matching the slurm-client installed in
+# deploy/Dockerfile.yggdrasil.dind).
+#
+# Built by docker compose (see docker-compose.yml service "slurmctld").
+# The munge key for cluster auth is generated on the shared slurm-munge
+# volume by the entrypoint on first boot.
+
+FROM debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends slurmctld slurm-client munge \
+    && rm -rf /var/lib/apt/lists/* \
+    # munged (0.5.16) security layout: it requires these paths to be
+    # root-owned and the munge key to be root:root 0400. The runtime
+    # pieces (/run/munge, .seed, the shared key) are set up by the
+    # entrypoint.
+    && chown root:root /etc/munge && chmod 755 /etc/munge \
+    && chown root:root /var/log/munge && chmod 700 /var/log/munge \
+    && chown root:root /var/lib/munge && chmod 755 /var/lib/munge \
+    # The package does not create the state dir without systemd; slurmctld
+    # (running as root) requires it to be SlurmUser-owned. Seeding it in
+    # the image also seeds the slurm-state volume on first use.
+    && install -d -o slurm -g slurm -m 755 /var/spool/slurmctld
+
+# Single shared cluster config (see the header in deploy/slurm/slurm.conf).
+COPY deploy/slurm/slurm.conf /etc/slurm/slurm.conf
+
+COPY deploy/slurm/entrypoint-slurm-ctld.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint-slurm-ctld.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-slurm-ctld.sh"]

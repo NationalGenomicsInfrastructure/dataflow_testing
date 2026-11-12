@@ -30,12 +30,18 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status; profile full adds biomate)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status + slurmctld + slurmd; profile full adds biomate)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
 │   ├── yggdrasil-config/main.json
 │   ├── seed/test_scenario_happy_path.json
+│   ├── seed/test_scenario_slurm.json
+│   ├── slurm/slurm.conf           # shared config of the local SLURM cluster
+│   ├── slurm/entrypoint-slurm-ctld.sh
+│   ├── slurm/entrypoint-slurmd.sh
+│   ├── Dockerfile.slurm-ctld      # SLURM controller (Debian trixie slurmctld)
+│   ├── Dockerfile.slurmd          # SLURM compute node (Debian trixie slurmd)
 │   ├── seed/flowcell_status_biomate.json
 │   ├── seed/demux_sample_info_biomate.json
 │   ├── seed/demux_sample_info/     # test-flowcell seeds, bind-mounted into statusdb
@@ -156,6 +162,74 @@ Each injection gets a unique document id, so it always executes; the initial
 on restarts (plans are tracked by `run_token`/`executed_run_token` and
 watcher checkpoints are persisted in CouchDB). Use `make compose-reset` for a
 completely fresh state.
+
+### SLURM job submission
+
+The stack runs a real single-node SLURM cluster (`slurmctld` + `slurmd`
+services; see `deploy/slurm/slurm.conf`) as a stand-in for an HPC, and the
+yggdrasil container carries the SLURM client (`sbatch`/`sacct`) plus a
+`main.json` setting of `yggdrasil.slurm.backend = "slurm"`. The
+`slurm_job` test recipe submits a batch job through Yggdrasil's
+`SlurmJobManager` and waits for its terminal state:
+
+```bash
+make compose-scenario-slurm   # PUTs a fresh test_scenario:slurm-<timestamp> doc
+```
+
+Watch the plan run with `make compose-logs` (the step records the
+`job_id` and `final_state` in its metrics); from inside the stack you can
+inspect the job the usual SLURM way, e.g.
+`docker compose exec slurmctld sacct -j <job_id>`.
+
+### dmx_realm's SLURM executor (opt-in)
+
+By default `dmx_realm` runs each branch's Nextflow invocation as a
+subprocess of the yggdrasil daemon process. With `DMX_EXECUTOR=slurm` the
+realm instead submits each branch as an **sbatch job** to the stack's
+SLURM cluster — the same `SlurmJobManager` (sbatch/sacct) the
+`slurm_job` scenario uses, and the shape of a production HPC deployment:
+
+```bash
+make compose-demux-slurm                     # recreate yggdrasil with DMX_EXECUTOR=slurm
+make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6   # arm one flowcell (adds transferred_to_hpc)
+make compose-demux-local                     # back to local execution (the default)
+```
+
+The entrypoint materialises the flag as `dev_dmx_realm.json`
+(nextflow.executor=slurm; in dev mode the realm's ConfigLoader prefers
+`dev_*.json` over `dmx_realm.json`, and the file is removed again on a
+local run), and the `execute_demux` step writes the branch's batch script
+to its work directory, submits it and blocks until the job reaches a
+terminal state — `COMPLETED` is expected, anything else fails the step
+with the tail of the run log (on the shared volume). The node runs the
+**real pipeline**: `deploy/Dockerfile.slurmd` provides the JRE, a pinned
+Nextflow launcher and a static docker CLI pointing at the dind sidecar
+(container execution for `-profile docker` still happens there), and
+`NXF_HOME` lives on the shared `/work` volume, so the pipeline checkout
+and the tool images are shared with the yggdrasil container. sbatch
+resource defaults are configurable in the `nextflow` object of
+`deploy/yggdrasil-config/dmx_realm.json` (`sbatch_cpus`, `sbatch_time`,
+`sbatch_partition`); no `--mem` is requested, so the cluster's default
+memory applies.
+
+While the plan runs, the usual SLURM tools apply, and the per-branch
+script and log live on the shared volume under the plan directory:
+
+```bash
+docker compose exec slurmctld squeue                        # dmx-<fcid>-lane_N_settings_I
+docker compose exec yggdrasil sacct -n -X -o JobID,JobName,State
+ls /work/dmx_realm:<FCID>:demux/lane_*__execute_demux/      # nextflow_slurm.sh + nextflow_run.log
+```
+
+On a fresh stack the first run also git-fetches the pipeline and pulls
+the tool images into the dind daemon (one-time, ~3 GB); later runs reuse
+them. From a completely clean state:
+
+```bash
+make compose-reset
+DMX_EXECUTOR=slurm make compose-up
+make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6
+```
 
 The demux workflow (`dmx_realm`) operates on the documents in the
 `flowcell_status` and `demux_sample_info` databases. A fresh stack is
