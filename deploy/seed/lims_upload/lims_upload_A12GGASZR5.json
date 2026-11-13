@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "num_lanes": 1,
+    "run_setup": "151-0-0-151",
+    "setup_lims_step_id": "",
+    "instrument_type": "NextSeq 2000",
+    "run_mode": "NextSeq 2000 300"
+  },
+  "uploaded_lims_info": [
+    {
+      "lane": "1",
+      "sample_id": "P37902_1001",
+      "sample_name": "P37902_1001",
+      "sample_project": "A__NoIndex_25_08",
+      "description": "A__NoIndex_25_08",
+      "sample_ref": "Human (Homo sapiens GRCh38)",
+      "rc": "151-151",
+      "recipe": "151-0-0-151",
+      "control": "N",
+      "operator": "John_Doe",
+      "flowcell_id": "A12GGASZR5",
+      "sw": "1:1",
+      "index": "",
+      "index2": ""
+    }
+  ]
+}
