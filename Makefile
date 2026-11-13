@@ -11,7 +11,7 @@ SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
         compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
         compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
         compose-scenario compose-scenario-slurm compose-demux-slurm compose-demux-local \
-        compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+        compose-seed-status compose-trigger compose-inject compose-sync-flowcell compose-load-demux
 
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
@@ -50,6 +50,7 @@ help: ## Show this help
 	@echo "  compose-scenario-slurm    Inject the SLURM submission scenario into a running stack"
 	@echo "  compose-demux-slurm     Run dmx_realm's Nextflow runs on the SLURM node (opt-in)"
 	@echo "  compose-demux-local     Back to local execution of dmx_realm's Nextflow runs (default)"
+	@echo "  compose-load-demux        Load demux_sample_info (DEMUX_SOURCE=lims|seed DEMUX_FLOWCELLS= FORCE=1)"
 	@echo "  compose-seed-status       Inject the BioMate status seeds (opt-in) into a running stack"
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
 	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
@@ -310,11 +311,13 @@ FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\
 # Build and start the stack (statusdb + yggdrasil + genomics-status)
 compose-up: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status)
 	$(COMPOSE) up -d
+	@$(MAKE) --no-print-directory compose-load-demux
 	$(call COMPOSE_LINKS,$(GS_LINKS))
 
 # Build and start the full stack (core + biomate)
 compose-up-full: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status, biomate)
 	$(COMPOSE) --profile full up -d
+	@$(MAKE) --no-print-directory compose-load-demux
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Build and start only statusdb
@@ -342,6 +345,7 @@ compose-rebuild: ## Rebuild all default-stack images without cache; recreate the
 	$(COMPOSE) build --no-cache
 	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
 	$(COMPOSE) up -d --force-recreate
+	@$(MAKE) --no-print-directory compose-load-demux
 	$(call COMPOSE_LINKS,$(GS_LINKS))
 
 # Rebuild full stack images without cache and recreate. The genomics-status
@@ -352,6 +356,7 @@ compose-rebuild-full: ## Rebuild all images without cache; recreate the stack (p
 	$(COMPOSE) --profile full build --no-cache
 	$(MAKE) compose-build-yggdrasil YGG_NO_CACHE=--no-cache
 	$(COMPOSE) --profile full up -d --force-recreate
+	@$(MAKE) --no-print-directory compose-load-demux
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Teardown always passes --profile full (and --profile dind) so
@@ -401,6 +406,7 @@ compose-reset-statusdb: ## Reset databases through the running CouchDB API while
 		/opt/couchdb/scripts/init-seed-data.sh; \
 		test -f /opt/couchdb/data/.seed_initialized; \
 	'; \
+	$(MAKE) --no-print-directory compose-load-demux; \
 	if [ "$$paused" = "1" ]; then \
 		$(COMPOSE) unpause yggdrasil; \
 		trap - 0 INT TERM; \
@@ -489,6 +495,34 @@ compose-demux-slurm: ## Run dmx_realm's Nextflow runs on the SLURM node (opt-in)
 compose-demux-local: ## Back to local execution of dmx_realm's Nextflow runs (default)
 	DMX_EXECUTOR=local $(COMPOSE) up -d --force-recreate yggdrasil
 	@echo "dmx_realm Nextflow runs execute locally again (default)"
+
+# Load the test flowcells' demux_sample_info documents into a running
+# stack (statusdb boots with that database empty). The up, rebuild and
+# reset-statusdb targets call this; run it directly to switch source or
+# reload. Flowcells that already have a document are skipped.
+#   DEMUX_SOURCE=lims (default): POST deploy/seed/lims_upload/*.json to
+#     the genomics-status API, as the LIMS samplesheet generator does;
+#     genomics-status calculates the samplesheets.
+#   DEMUX_SOURCE=seed: PUT the finished documents in
+#     deploy/seed/demux_sample_info/*.json straight into CouchDB.
+#   DEMUX_FLOWCELLS= space separated flowcell ids (default: all)
+#   FORCE=1 delete and reload flowcells that already have a document
+# To switch source on a running stack, reset it:
+#   make compose-reset-statusdb CONFIRM=1 DEMUX_SOURCE=seed
+DEMUX_SOURCE ?= lims
+DEMUX_FLOWCELLS ?=
+compose-load-demux: ## Load demux_sample_info from DEMUX_SOURCE (lims|seed) into a running stack
+	@case "$(DEMUX_SOURCE)" in lims|seed) ;; \
+		*) echo "error: DEMUX_SOURCE must be 'lims' or 'seed', got '$(DEMUX_SOURCE)'"; exit 1 ;; \
+	esac
+	@python3 deploy/seed/load_demux_sample_info.py \
+		--source "$(DEMUX_SOURCE)" \
+		--flowcells "$(DEMUX_FLOWCELLS)" \
+		--couch-url http://localhost:5984 \
+		--genstat-url http://localhost:9761 \
+		--user "$${STACK_COUCH_USER:-admin}" \
+		--password "$${STACK_COUCH_PASSWORD:-secret}" \
+		$(if $(filter 1,$(FORCE)),--force)
 
 # Opt-in seeding of the BioMate workflow documents. Each seed keeps the
 # _id from the file (deterministic, idempotent). _id/_rev are stripped from
