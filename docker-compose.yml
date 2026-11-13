@@ -46,6 +46,13 @@ services:
       # the two directories restores editability.
       - ./deploy/seed/demux_sample_info:/opt/couchdb/seed_data/demux_sample_info
       - ./deploy/seed/flowcell_status:/opt/couchdb/seed_data/flowcell_status
+      # Projects referenced by deploy/seed/lims_upload, so genstat can
+      # resolve project_id and library_construction_method when the LIMS
+      # payloads are POSTed. Replaces the image's generic P1234x projects.
+      - ./deploy/seed/projects:/opt/couchdb/seed_data/projects
+      # The submodule's demux configuration plus the made-up "Test: ..."
+      # library methods the seeded projects use (UMI layouts, index FASTQs).
+      - ./deploy/seed/demux_configuration:/opt/couchdb/seed_data/demux_configuration
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5984/_up"]
       interval: 5s
