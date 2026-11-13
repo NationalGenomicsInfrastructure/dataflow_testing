@@ -43,8 +43,11 @@ services:
       # under /opt/couchdb at boot (and aborts on a read-only mount), so
       # first boot hands ownership of the mounted files to the image's
       # couchdb user (uid 5984); `sudo chown -R $(id -u):$(id -g)` on
-      # the two directories restores editability.
-      - ./deploy/seed/demux_sample_info:/opt/couchdb/seed_data/demux_sample_info
+      # the mounted directories restores editability.
+      # demux_sample_info starts empty (the empty directory hides the
+      # image's own BioMate seed): the Makefile loads it after the stack
+      # is up, from DEMUX_SOURCE (see compose-load-demux).
+      - ./deploy/seed/demux_sample_info_empty:/opt/couchdb/seed_data/demux_sample_info
       - ./deploy/seed/flowcell_status:/opt/couchdb/seed_data/flowcell_status
       # Projects referenced by deploy/seed/lims_upload, so genstat can
       # resolve project_id and library_construction_method when the LIMS
