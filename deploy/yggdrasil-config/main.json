@@ -3,6 +3,7 @@
         "log_dir": "/logs/yggdrasil",
         "job_monitor_poll_interval": 60,
         "plan_watcher_poll_interval": 5,
+        "plan_watcher_longpoll_timeout_ms": 5000,
         "slurm": {
             "backend": "slurm"
         }
