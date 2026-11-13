@@ -118,7 +118,10 @@
             }
         },
         "defaults": {
-            "start_seq": "0"
+            "start_seq": "0",
+            "couchdb": {
+                "longpoll_timeout_ms": 5000
+            }
         }
     }
 }

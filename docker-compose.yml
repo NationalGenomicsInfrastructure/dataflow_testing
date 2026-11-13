@@ -128,11 +128,13 @@ services:
     image: dataflow-yggdrasil-dind:latest
     # The daemon stops gracefully on SIGTERM (cli.py routes it to the same
     # shutdown path as Ctrl+C), but its stop waits for in-flight CouchDB
-    # changes polls (uncancellable threads) and the plan drain. The PlanWatcher
-    # longpoll holds up to yggdrasil.plan_watcher_longpoll_timeout_ms (5 s in
-    # deploy/yggdrasil-config/main.json; production default 60 s) plus a 5 s
-    # socket margin, so give it headroom beyond that: a stop then ends with
-    # exit 0 instead of a SIGKILL (exit 137). Raise this if you raise the key.
+    # changes polls (uncancellable threads) and the plan drain. Each longpoll
+    # holds up to its configured time plus a 5 s socket margin; both are 5 s in
+    # deploy/yggdrasil-config/main.json (production default 60 s):
+    # yggdrasil.plan_watcher_longpoll_timeout_ms for the PlanWatcher and
+    # external_systems.defaults.couchdb.longpoll_timeout_ms for the realm
+    # watchers. Give the stop headroom beyond that: it then ends with exit 0
+    # instead of a SIGKILL (exit 137). Raise this if you raise either key.
     stop_grace_period: "30s"
     environment:
       YGG_COUCH_USER: ${STACK_COUCH_USER:-admin}
