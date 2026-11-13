@@ -1,0 +1,9 @@
+{
+  "_id": "P37987",
+  "project_id": "P37987",
+  "project_name": "J.SingleUMI_25_04",
+  "details": {
+    "library_construction_method": "Test: Single UMI (8 nt at start of index 2)",
+    "sequencing_setup": "151-10-8-151"
+  }
+}
