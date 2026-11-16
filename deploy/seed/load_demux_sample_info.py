@@ -20,17 +20,17 @@ them again (for lims, through the API's create path, not its reupload).
 import argparse
 import base64
 import json
-import os
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
-SEED_DIR = os.path.dirname(os.path.abspath(__file__))
+SEED_DIR = Path(__file__).resolve().parent
 SOURCES = {
-    "lims": (os.path.join(SEED_DIR, "lims_upload"), "lims_upload_"),
-    "seed": (os.path.join(SEED_DIR, "demux_sample_info"), "demux_sample_info_"),
+    "lims": (SEED_DIR / "lims_upload", "lims_upload_"),
+    "seed": (SEED_DIR / "demux_sample_info", "demux_sample_info_"),
 }
 
 
@@ -78,11 +78,7 @@ def wait_for(url, name, timeout):
 
 def available_flowcells(source):
     directory, prefix = SOURCES[source]
-    found = {}
-    for name in sorted(os.listdir(directory)):
-        if name.startswith(prefix) and name.endswith(".json"):
-            found[name[len(prefix):-len(".json")]] = os.path.join(directory, name)
-    return found
+    return {path.stem.removeprefix(prefix): path for path in sorted(directory.glob(f"{prefix}*.json"))}
 
 
 def existing_docs(couch, auth, flowcell_id):
@@ -135,8 +131,7 @@ def main():
             if status not in (200, 202):
                 die(f"cannot delete demux_sample_info/{doc['_id']} (HTTP {status}): {res}")
 
-        with open(available[fc]) as fh:
-            body = json.load(fh)
+        body = json.loads(available[fc].read_text())
         if args.source == "lims":
             status, res = request("POST", f"{genstat}/api/v1/demux_sample_info/{fc}", body)
             if status != 201:
