@@ -11,7 +11,8 @@ SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
         compose-up-statusdb compose-up-biomate compose-up-yggdrasil compose-up-genomics-status \
         compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
         compose-scenario compose-scenario-slurm compose-demux-slurm compose-demux-local \
-        compose-seed-status compose-trigger compose-inject compose-sync-flowcell
+        compose-seed-status compose-trigger compose-inject compose-sync-flowcell \
+        compose-check-demux
 
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
@@ -54,6 +55,7 @@ help: ## Show this help
 	@echo "  compose-trigger           Re-touch the seeded docs to re-fire the demux workflow (DBS=)"
 	@echo "  compose-trigger-rerun     Increment run_token on documents in yggdrasil_plans"
 	@echo "  compose-inject            Inject fresh generated flowcells into a running stack (COUNT= LANES= DIR=)"
+	@echo "  compose-check-demux       Compare the demux FASTQs with the expected ones (FLOWCELL_ID=, empty = all)"
 	@echo ""
 	@echo "Per-submodule targets (replace TARGET with one of: $(SUBMODULES))"
 	@echo "  init-TARGET    Register, sync, and initialize one submodule"
@@ -611,3 +613,9 @@ compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding tra
 		echo "Finalized flowcell doc '$${id}' (added transferred_to_hpc event at $${now}) for flowcell $(FLOWCELL_ID)"; \
 	fi
 	@echo "Watch the workflow with: make compose-logs"
+
+# Compare the FASTQs the demux workflow produced with the expected ones in
+# the runfolder's Demultiplexing/ (pristine copy in the yggdrasil image).
+# Run after the plan has finished. FLOWCELL_ID= (empty) checks all four.
+compose-check-demux: ## Compare the demux FASTQs with the expected ones (FLOWCELL_ID=, empty = all)
+	@$(COMPOSE) exec -T yggdrasil python3 - $(FLOWCELL_ID) < deploy/seed/check_demux_results.py

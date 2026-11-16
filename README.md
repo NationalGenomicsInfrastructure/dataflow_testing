@@ -271,6 +271,33 @@ the demux workflow does not start on a fresh stack. Use `compose-sync-flowcell`
 (with an optional `FLOWCELL_ID=` parameter) to add the event and trigger the
 workflow for one flowcell. The default flowcell ID is A12GGASZR5.
 
+### Check the demux results
+
+Each test runfolder ships a `Demultiplexing/` directory with the expected
+FASTQs. Once the plan has finished, compare the pipeline's output with them:
+
+```bash
+make compose-check-demux                         # default flowcell (A12GGASZR5)
+make compose-check-demux FLOWCELL_ID=C36MNBVCX7  # one flowcell
+make compose-check-demux FLOWCELL_ID=            # all four
+```
+
+`deploy/seed/check_demux_results.py` runs inside the yggdrasil container and
+matches files on sample name, lane and read (directory layout and `_S<n>`
+are ignored). Per file it compares the read count and the sorted sequences;
+headers and qualities are not compared. Index-read FASTQs (`I1`/`I2`) are
+skipped. Run one flowcell at a time: two concurrent demux plans fail on a
+shared Nextflow session lock.
+
+Limitation: Undetermined FASTQs are **not** checked, so reads wrongly left
+unassigned only show up as a read-count mismatch in a sample file. Two
+reasons: nf-core/demultiplex does not publish `Undetermined_S0_*` to the
+results directory (they stay in the Nextflow work dir), and BCL Convert
+writes them at full cycle length while the expected ones are trimmed per
+`OverrideCycles` (shortened reads lose their tail, `U8Y143` reads their UMI
+head). Exit status is non-zero on any
+mismatch, or when a flowcell has no results.
+
 ### Test recipes
 
 Scenario documents select a recipe via the `recipe` field
@@ -400,6 +427,7 @@ code, including the genomics-status base (conda env) image.
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
 | `make compose-sync-flowcell` | Add `transferred_to_hpc` event to trigger the demux workflow for a seeded flowcell (default: A12GGASZR5) |
 | `make compose-sync-flowcell FLOWCELL_ID=<id>` | Specify which flowcell to finalize (e.g., B98QWERTY6, C36MNBVCX7, D74LKJHGF8) |
+| `make compose-check-demux` | Compare the demux FASTQs with the expected ones in `Demultiplexing/`; `FLOWCELL_ID=<id>`, empty = all |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 
