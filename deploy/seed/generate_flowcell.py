@@ -7,7 +7,7 @@ random (default)  Derive COUNT new flowcells from the live template
                   documents: fresh flowcell/runfolder ids, remapped
                   projects/samples, event timestamps rebased to now.
 --dir PATH        Build the documents from a real run folder's
-                  SampleSheet.csv (e.g. BioMate/temp). Ids come from the
+                  SampleSheet.csv. Ids come from the
                   run folder name; docs are upserted by flowcell_id, so
                   re-injecting the same run folder replaces the docs.
 
@@ -135,6 +135,11 @@ def rebase_flowcell_status(template, old_runfolder, new_runfolder, new_fcid):
     delta = now_dt() - stamps[-1]
     for e, t in zip(events, stamps):
         e["timestamp"] = (t + delta).strftime(ISO_Z)
+    # The seeded templates deliberately lack this event (see README);
+    # dmx_realm defers every flowcell without it.
+    if not any(e.get("event_type") == "transferred_to_hpc" for e in events):
+        events.append({"event_type": "transferred_to_hpc",
+                       "timestamp": now_dt().strftime(ISO_Z), "data": {}})
 
     def fix(value):
         if isinstance(value, str) and old_runfolder and old_runfolder in value:
@@ -228,29 +233,41 @@ def rewrite_document(doc, mapping):
     return json.loads(text)
 
 
+def template_lanes(doc):
+    """Sorted lane numbers that have a samplesheet block."""
+    return sorted({int(b["lane"]) for b in doc.get("samplesheets", [])})
+
+
 def transform_lanes(doc, m, fresh_name):
     """Keep lanes 1..m; lanes beyond the template's range deep-copy source
-    lanes (round-robin over 1..8) with fresh sample names. fresh_name(project)
-    must return a unique name per call."""
+    lanes (round-robin over the template's lanes) with fresh sample names.
+    fresh_name(project) must return a unique name per call."""
     ss = doc.get("samplesheets", [])
     by_lane = {}
     for b in ss:
         by_lane.setdefault(str(int(b["lane"])), b)
+    src_lanes = template_lanes(doc)
+    first_ext = (src_lanes[-1] if src_lanes else 0) + 1
+
+    def source(i):
+        return str(src_lanes[(i - 1) % len(src_lanes)]) if src_lanes else ""
 
     ext = {}
-    for i in range(9, m + 1):
-        src = str((i - 1) % 8 + 1)
+    for i in range(first_ext, m + 1):
+        src = source(i)
         if src in by_lane:
             ext[i] = [fresh_name(r.get("Sample_Project", ""))
                       for r in by_lane[src]["BCLConvert_Data"]]
 
     keep = [b for b in ss if int(b["lane"]) <= m]
-    for i in range(9, m + 1):
-        src = str((i - 1) % 8 + 1)
+    for i in range(first_ext, m + 1):
+        src = source(i)
         if src not in by_lane or i not in ext:
             continue
         nb = copy.deepcopy(by_lane[src])
         nb["lane"] = str(i)
+        if str(nb.get("filename", "")).startswith(f"Lane{src}_"):
+            nb["filename"] = f"Lane{i}_" + nb["filename"][len(f"Lane{src}_"):]
         for r, name in zip(nb["BCLConvert_Data"], ext[i]):
             r["Lane"] = str(i)
             r["Sample_Name"] = name
@@ -262,8 +279,8 @@ def transform_lanes(doc, m, fresh_name):
 
     lims = doc.get("uploaded_lims_info", [])
     keep_l = [r for r in lims if int(r["lane"]) <= m]
-    for i in range(9, m + 1):
-        src = str((i - 1) % 8 + 1)
+    for i in range(first_ext, m + 1):
+        src = source(i)
         if i not in ext:
             continue
         src_rows = [r for r in lims if str(int(r["lane"])) == src]
@@ -279,8 +296,8 @@ def transform_lanes(doc, m, fresh_name):
     lanes = calc.get("lanes")
     if lanes:
         new_lanes = {k: v for k, v in lanes.items() if int(k) <= m}
-        for i in range(9, m + 1):
-            src = str((i - 1) % 8 + 1)
+        for i in range(first_ext, m + 1):
+            src = source(i)
             if src not in lanes or i not in ext:
                 continue
             nv = copy.deepcopy(lanes[src])
@@ -530,15 +547,21 @@ def build_random_mapping(template, old_runfolder, new_runfolder, new_fcid, rng):
 
     used_names = set(mapping.values())
 
+    picked = {}  # dunder(old) -> (letter, digits), shared by 'A.x' and 'A__x'
+
     def new_project(old):
         m = PROJECT_RE.match(old)
         sep = m.group(2) if m else "__"
         middle = m.group(3) if m else old
-        while True:
-            cand = f"{rng.choice(string.ascii_uppercase)}{sep}{middle}_25_{rand_digits(2, rng)}"
-            if cand not in used_names:
-                used_names.add(cand)
-                return cand
+        key = dunder(old)
+        while key not in picked:
+            letter, digits = rng.choice(string.ascii_uppercase), rand_digits(2, rng)
+            canon = f"{letter}__{middle}_25_{digits}"
+            if canon not in used_names:
+                used_names.add(canon)
+                picked[key] = (letter, digits)
+        letter, digits = picked[key]
+        return f"{letter}{sep}{middle}_25_{digits}"
 
     for p in sorted(ident["projects"]):
         put(p, new_project(p))
@@ -649,7 +672,7 @@ def generate_random(couch, t_flowcell, t_demux, lanes, taken, rng):
 
     # Walk extension lanes and assign final names placeholder by placeholder.
     for b in demux_doc["samplesheets"]:
-        if int(b["lane"]) > int((t_demux.get("metadata") or {}).get("num_lanes") or 8):
+        if int(b["lane"]) > max(template_lanes(t_demux), default=0):
             for r in b["BCLConvert_Data"]:
                 final_name(r.get("Sample_Project", ""), r["Sample_Name"])
     mapping.update(ext_remap)
@@ -668,7 +691,7 @@ def write_docs(couch, mode, fcid, runfolder, status_doc, demux_doc):
     for db, doc in (("flowcell_status", status_doc), ("demux_sample_info", demux_doc)):
         if mode == "random":
             status, res = couch.post(f"/{db}", doc)
-            if status != 201:
+            if status not in (201, 202):
                 die(f"POST /{db} failed (HTTP {status}): {res}")
             written.append((db, res.get("id"), "created"))
         else:
@@ -688,10 +711,10 @@ def write_docs(couch, mode, fcid, runfolder, status_doc, demux_doc):
                 label = "updated"
             else:
                 status, res = couch.post(f"/{db}", body)
-                target = (res.get("id"), None)
                 label = "created"
-            if status != 201:
+            if status not in (201, 202):
                 die(f"write to /{db} failed (HTTP {status}): {res}")
+            target = target or (res.get("id"), None)
             written.append((db, target[0], label))
     for db, doc_id, label in written:
         print(f"  {db}: {label} '{doc_id}'")

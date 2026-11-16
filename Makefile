@@ -12,19 +12,24 @@ SUBMODULES := BioMate genomics-status StatusDB_NGI Yggdrasil demux_realm
         compose-rebuild compose-rebuild-full compose-down compose-logs compose-ps compose-reset \
         compose-scenario compose-scenario-slurm compose-demux-slurm compose-demux-local \
         compose-seed-status compose-trigger compose-inject compose-sync-flowcell \
-        compose-check-demux
+        compose-check-demux compose-reset-statusdb compose-reset-work compose-trigger-rerun
+
+# Compose reads .env by itself; make does not. Load it so the curl targets
+# below use the same CouchDB credentials as the stack.
+-include .env
+export STACK_COUCH_USER STACK_COUCH_PASSWORD
 
 help: ## Show this help
 	@echo "Usage: make [target] [TARGET]"
 	@echo ""
 	@echo "All-submodule targets:"
-	@echo "  init           Register and initialize root modules; clone missing genomics-status/nvd3"
+	@echo "  init           Initialize missing root modules; clone missing genomics-status/nvd3"
 	@echo "  deinit         Remove all submodule worktrees and Git data (CONFIRM=1 required)"
 	@echo "  deinit-all     Alias for deinit"
 	@echo "  status         Show status of all submodules"
 	@echo "  update-all     Advance all submodules to their current branch's latest commit"
 	@echo "  sync           Sync submodule remotes with .gitmodules"
-	@echo "  reset          Destructively reset submodules to the commits recorded by the repo"
+	@echo "  reset          Destructively reset submodules to the commits recorded by the repo (CONFIRM=1 required)"
 	@echo "  use-dev        Switch the repo to 'dev' and pin submodules to its commits"
 	@echo "  use-main       Switch the repo to 'main' (or 'master') and pin submodule commits"
 	@echo "  extract-deps   Extract deps and show how to add them via pixi"
@@ -34,7 +39,7 @@ help: ## Show this help
 	@echo "  compose-up-full           Same as compose-up plus biomate (profile full)"
 	@echo "  compose-up-statusdb       Build and start only statusdb"
 	@echo "  compose-up-biomate        Build and start only biomate (profile full)"
-	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its dep: statusdb)"
+	@echo "  compose-up-yggdrasil      Build and start yggdrasil (plus its deps: statusdb, dind, SLURM)"
 	@echo "  compose-up-genomics-status  Build and start genomics-status"
 	@echo "  compose-build-yggdrasil   Build the base + dind-flavoured yggdrasil images"
 	@echo "  compose-build-slurm       Build the SLURM cluster images (controller + node)"
@@ -46,7 +51,7 @@ help: ## Show this help
 	@echo "  compose-ps                Show stack status"
 	@echo "  compose-reset             Stop the stack and remove all volumes"
 	@echo "  compose-reset-statusdb    Reset CouchDB while Yggdrasil is paused; preserve files (CONFIRM=1)"
-	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and resume it (CONFIRM=1)"
+	@echo "  compose-reset-work        Pause Yggdrasil, clear /work, and restart it (CONFIRM=1)"
 	@echo "  compose-scenario          Inject a fresh test scenario into a running stack"
 	@echo "  compose-scenario-slurm    Inject the SLURM submission scenario into a running stack"
 	@echo "  compose-demux-slurm     Run dmx_realm's Nextflow runs on the SLURM node (opt-in)"
@@ -75,13 +80,17 @@ init-%:
 init-target:
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($$(git submodule status "$$sub" | cut -c1))" = "-" ]; then \
+		if [ "$$(git submodule status "$$sub" | cut -c1)" = "-" ]; then \
 			git submodule init "$$sub" && git submodule update "$$sub" || exit 1; \
 		else \
 			echo "$$sub already initialized"; \
 		fi \
 	else \
 		git submodule add --name "$$sub" git@github.com:NationalGenomicsInfrastructure/$$sub.git "$$sub" || exit 1; \
+	fi; \
+	nvd3=genomics-status/run_dir/static/nvd3; \
+	if [ "$$sub" = genomics-status ] && [ -z "$$(ls -A "$$nvd3" 2>/dev/null)" ]; then \
+		git -C genomics-status submodule update --init run_dir/static/nvd3 || exit 1; \
 	fi
 
 deinit:
@@ -97,13 +106,19 @@ deinit-all:
 deinit-%:
 	@$(MAKE) --no-print-directory -f "$(abspath $(lastword $(MAKEFILE_LIST)))" deinit-target SUBMODULE="$*"
 
+# No -f and no `git rm`: deinit refuses a submodule with local changes, and
+# the gitlink + .gitmodules entry stay so `make init` can restore it.
 deinit-target:
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: deinit requires CONFIRM=1"; \
+		exit 1; \
+	fi
 	@sub="$(SUBMODULE)"; \
 	if [ -d "$$sub" ]; then \
-		if [ "$$($$(git submodule status "$$sub" | cut -c1))" != "-" ]; then \
-			git submodule deinit -f "$$sub" && git rm -f "$$sub" && rm -rf .git/modules/$$sub || exit 1; \
+		if [ "$$(git submodule status "$$sub" | cut -c1)" != "-" ]; then \
+			git submodule deinit "$$sub" && rm -rf ".git/modules/$$sub" || exit 1; \
 		else \
-			rm -rf "$$sub"; \
+			echo "$$sub not initialized"; \
 		fi \
 	else \
 		echo "$$sub not found"; \
@@ -112,14 +127,16 @@ deinit-target:
 status:
 	@git submodule status --recursive
 
-status-%:
-	@git submodule status "$(SUBMODULE)"
-
 sync:
 	@git submodule sync --recursive
 
 reset:
-	@git submodule foreach --recursive 'git reset --hard'
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "ERROR: reset discards local submodule changes and untracked files; rerun with CONFIRM=1"; \
+		exit 1; \
+	fi
+	@git submodule update --force --recursive
+	@git submodule foreach --recursive 'git clean -fd'
 
 # Switch the top-level repository to the given branch and check out the
 # submodule commits pinned by that branch. Submodules are never switched
@@ -245,12 +262,12 @@ TAB := $(empty) $(empty)
 # The name is emitted as '$$VAR' so the shell prints the literal
 # '$VAR'; the value is single-quoted at the printf call site, outside
 # the double quotes, to keep the shell from expanding it.
-ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_USER)),$(STACK_COUCH_USER)))
+ifneq (,$(and $(filter environment command line file,$(origin STACK_COUCH_USER)),$(STACK_COUCH_USER)))
 	CREDENTIAL_USER = $$STACK_COUCH_USER
 else
 	CREDENTIAL_USER = admin
 endif
-ifneq (,$(and $(filter environment command line,$(origin STACK_COUCH_PASSWORD)),$(STACK_COUCH_PASSWORD)))
+ifneq (,$(and $(filter environment command line file,$(origin STACK_COUCH_PASSWORD)),$(STACK_COUCH_PASSWORD)))
 	CREDENTIAL_PASSWORD = $$STACK_COUCH_PASSWORD
 else
 	CREDENTIAL_PASSWORD = secret
@@ -311,29 +328,29 @@ FULL_LINKS = $(TAB)@printf '  BioMate:                    http://localhost:8765\
 
 # Build and start the stack (statusdb + yggdrasil + genomics-status)
 compose-up: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status)
-	$(COMPOSE) up -d
+	$(COMPOSE) up -d --build
 	$(call COMPOSE_LINKS,$(GS_LINKS))
 
 # Build and start the full stack (core + biomate)
 compose-up-full: compose-build-gs-base compose-build-yggdrasil compose-build-slurm ## Build and start the stack (statusdb, yggdrasil, genomics-status, biomate)
-	$(COMPOSE) --profile full up -d
+	$(COMPOSE) --profile full up -d --build
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
 # Build and start only statusdb
 compose-up-statusdb: ## Build and start only statusdb
-	$(COMPOSE) up -d statusdb
+	$(COMPOSE) up -d --build statusdb
 
 # Build and start only biomate (profile full)
 compose-up-biomate: ## Build and start only biomate (profile full)
-	$(COMPOSE) --profile full up -d biomate
+	$(COMPOSE) --profile full up -d --build biomate
 
 # Build and start only yggdrasil (plus its dep: statusdb)
 compose-up-yggdrasil: compose-build-yggdrasil ## Build and start yggdrasil (plus its dep: statusdb)
-	$(COMPOSE) up -d yggdrasil
+	$(COMPOSE) up -d --build yggdrasil
 
 # Build and start only genomics-status
 compose-up-genomics-status: compose-build-gs-base ## Build and start genomics-status
-	$(COMPOSE) up -d genomics-status
+	$(COMPOSE) up -d --build genomics-status
 
 # Rebuild images without cache and recreate the stack. The yggdrasil
 # images are built outside compose (see compose-build-yggdrasil), so they
@@ -356,11 +373,11 @@ compose-rebuild-full: ## Rebuild all images without cache; recreate the stack (p
 	$(COMPOSE) --profile full up -d --force-recreate
 	$(call COMPOSE_LINKS,$(FULL_LINKS))
 
-# Teardown always passes --profile full (and --profile dind) so
+# Teardown always passes --profile full so
 # profile-gated services (biomate) are covered no matter how the stack
 # was started; down only acts on containers that exist.
 compose-down: ## Stop and remove the stack (volumes are kept)
-	$(COMPOSE) --profile full --profile dind down --remove-orphans
+	$(COMPOSE) --profile full down --remove-orphans
 
 compose-logs: ## Follow yggdrasil logs
 	$(COMPOSE) logs -f yggdrasil
@@ -369,7 +386,7 @@ compose-ps: ## Show stack status
 	$(COMPOSE) ps
 
 compose-reset: ## Stop the stack and remove all volumes (fresh CouchDB on next up)
-	$(COMPOSE) --profile full --profile dind down -v --remove-orphans
+	$(COMPOSE) --profile full down -v --remove-orphans
 
 compose-reset-statusdb: ## Reset databases through the running CouchDB API while Yggdrasil is paused (CONFIRM=1)
 	@if [ "$(CONFIRM)" != "1" ]; then \
@@ -409,7 +426,9 @@ compose-reset-statusdb: ## Reset databases through the running CouchDB API while
 	fi; \
 	echo "StatusDB reset and seeded. Yggdrasil restored to its previous state; files and other services were left untouched."
 
-compose-reset-work: ## Clear Yggdrasil's /work volume while it is paused (CONFIRM=1)
+# The wipe also removes what the entrypoint stages at container start
+# (test runfolders, Nextflow config), so yggdrasil is restarted afterwards.
+compose-reset-work: ## Clear Yggdrasil's /work volume while it is paused, then restart it (CONFIRM=1)
 	@if [ "$(CONFIRM)" != "1" ]; then \
 		echo "ERROR: This deletes all Yggdrasil /work contents, including cached results; rerun with CONFIRM=1"; \
 		exit 1; \
@@ -438,8 +457,11 @@ compose-reset-work: ## Clear Yggdrasil's /work volume while it is paused (CONFIR
 	if [ "$$paused" = "1" ]; then \
 		$(COMPOSE) unpause yggdrasil; \
 		trap - 0 INT TERM; \
+		$(COMPOSE) restart yggdrasil; \
+	else \
+		echo "NOTE: Yggdrasil was already paused; run 'docker compose restart yggdrasil' to restage /work before the next plan."; \
 	fi; \
-	echo "Yggdrasil /work cleared; previous pause state restored. Databases, events, and logs were left untouched."
+	echo "Yggdrasil /work cleared and restaged by the entrypoint. Databases, events, and logs were left untouched."
 
 compose-trigger-rerun: ## Increment run_token on all non-system documents in yggdrasil_plans
 	@set -eu; \
@@ -509,9 +531,12 @@ compose-seed-status: ## Inject the BioMate flowcell_status + demux_sample_info s
 				-H 'Content-Type: application/json' \
 				--data-binary "$${body}" \
 				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
-			echo "Seeded $${f} doc '$${id}'"; \
+			echo "Seeded $${f} doc '$${id}'" || exit 1; \
+		elif [ "$${code}" = "200" ]; then \
+			echo "$${f} doc '$${id}' already present; skipping"; \
 		else \
-			echo "$${f} doc '$${id}' already present (HTTP $${code}); skipping"; \
+			echo "error: cannot read $${f} doc '$${id}' (HTTP $${code}) - is the stack up and are the credentials right?"; \
+			exit 1; \
 		fi; \
 	done
 
@@ -532,8 +557,9 @@ compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=
 		code=$$(curl -s -o /dev/null -w '%{http_code}' \
 			-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
 			"http://localhost:5984/$${f}/$${id}"); \
-		if [ "$${code}" = "404" ]; then \
-			echo "error: $${f} doc '$${id}' not found (HTTP 404) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+		if [ "$${code}" != "200" ]; then \
+			echo "error: $${f} doc '$${id}' not readable (HTTP $${code}) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+			exit 1; \
 		elif [ "$${f}" = "demux_sample_info" ]; then \
 			now=$$(date -u +%Y-%m-%dT%H:%M:%S.000+00:00); \
 			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
@@ -543,7 +569,7 @@ compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=
 				-H 'Content-Type: application/json' \
 				--data-binary "$${body}" \
 				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
-			echo "Touched $${f} doc '$${id}' (first_generated -> $${now})"; \
+			echo "Touched $${f} doc '$${id}' (first_generated -> $${now})" || exit 1; \
 		else \
 			now=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
 			body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/$${f}/$${id}" | \
@@ -553,7 +579,7 @@ compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=
 				-H 'Content-Type: application/json' \
 				--data-binary "$${body}" \
 				"http://localhost:5984/$${f}/$${id}" >/dev/null && \
-			echo "Touched $${f} doc '$${id}' (last event -> $${now})"; \
+			echo "Touched $${f} doc '$${id}' (last event -> $${now})" || exit 1; \
 		fi; \
 	done
 	@echo "Watch the workflow with: make compose-logs"
@@ -565,7 +591,7 @@ compose-trigger: ## Re-touch the seeded docs to re-fire the demux workflow (DBS=
 #     flowcell/runfolder ids, remapped projects/samples and event
 #     timestamps rebased to now;
 #   DIR mode: builds the docs from the SampleSheet.csv of a real run
-#     folder (e.g. DIR=BioMate/temp), upserted by flowcell_id, so
+#     folder (DIR=/path/to/runfolder), upserted by flowcell_id, so
 #     re-injecting the same run folder replaces the existing docs.
 #   COUNT= number of flowcells (random mode, default 1)
 #   LANES= lane count (default: the template's)
@@ -599,8 +625,9 @@ compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding tra
 	code=$$(curl -s -o /dev/null -w '%{http_code}' \
 		-u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" \
 		"http://localhost:5984/flowcell_status/$${id}"); \
-	if [ "$${code}" = "404" ]; then \
-		echo "error: flowcell_status doc '$${id}' not found (HTTP 404) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+	if [ "$${code}" != "200" ]; then \
+		echo "error: flowcell_status doc '$${id}' not readable (HTTP $${code}) - is the stack up and seeded? try: make compose-up && make compose-seed-status"; \
+		exit 1; \
 	else \
 		now=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
 		body=$$(curl -s -u "$${STACK_COUCH_USER:-admin}:$${STACK_COUCH_PASSWORD:-secret}" "http://localhost:5984/flowcell_status/$${id}" | \
@@ -610,7 +637,7 @@ compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding tra
 			-H 'Content-Type: application/json' \
 			--data-binary "$${body}" \
 			"http://localhost:5984/flowcell_status/$${id}" >/dev/null && \
-		echo "Finalized flowcell doc '$${id}' (added transferred_to_hpc event at $${now}) for flowcell $(FLOWCELL_ID)"; \
+		echo "Finalized flowcell doc '$${id}' (transferred_to_hpc event present) for flowcell $(FLOWCELL_ID)" || exit 1; \
 	fi
 	@echo "Watch the workflow with: make compose-logs"
 

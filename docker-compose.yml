@@ -165,9 +165,6 @@ services:
       # Ensure Nextflow is in PATH (it should be set by the image, but
       # explicitly add it here to be safe)
       PATH: /opt/nextflow:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      # Nextflow configuration for demultiplexing
-      DMX_NF_CONFIG: /work/demultiplex_local.config
-      DMX_HPC_BASE_PATH: /work
       NXF_VER: 26.10.0
       NXF_OPTS: -Ddocker.run.args='--platform linux/amd64'
     volumes:
@@ -191,9 +188,6 @@ services:
       # daemon's sbatch/sacct calls authenticate with it (the dind image
       # installs the SLURM client; see deploy/Dockerfile.yggdrasil.dind).
       - slurm-munge:/etc/munge
-      # Tiny Illumina BCL run for nf-core/demultiplex test runs (the
-      # dmx_realm demux workflow; see the README "Firing more work").
-      - ./BioMate/temp:/data/test_run:ro
     depends_on:
       # statusdb and dind only. biomate is profile-gated ("full") and
       # compose rejects depends_on entries that point at profile-excluded
@@ -338,9 +332,9 @@ services:
         condition: service_healthy
     volumes:
       # The cluster's munge key (the volume is mounted at /etc/munge, which
-      # holds the key in the Debian munge package layout). This container
-      # starts first in the stack, so its entrypoint is the key authority;
-      # slurmd and yggdrasil read the same key from the same volume.
+      # holds the key in the Debian munge package layout). slurmdbd
+      # starts first and normally creates the key (each entrypoint creates
+      # it only if absent); slurmd and yggdrasil read the same key.
       - slurm-munge:/etc/munge
       # Controller state (saved job state + accounting): persists across
       # container (re)creations so job IDs stay valid.
@@ -374,9 +368,9 @@ services:
       # scripts there and the node executes them there.
       - ygg-work:/work
     healthcheck:
-      # Ready once the node has registered with the controller and
-      # reports the idle state.
-      test: ["CMD-SHELL", "test \"$(sinfo -h -n slurmd -o %t 2>/dev/null)\" = idle"]
+      # Ready once the node has registered with the controller. A node
+      # running a job (mix/alloc) is healthy too; drained/down is not.
+      test: ["CMD-SHELL", "case \"$(sinfo -h -n slurmd -o %t 2>/dev/null)\" in idle|mix|alloc) ;; *) exit 1 ;; esac"]
       interval: 5s
       timeout: 10s
       retries: 30

@@ -6,8 +6,9 @@
 #    /var/log/munge root:root 700, /var/lib/munge root:root 755 with a
 #    .seed of root:munge 0440, and /run/munge root:root 755.
 # 2. Create the shared munge key if absent. The slurm-munge volume is
-#    mounted at /etc/munge and shared with slurmd and yggdrasil; this
-#    container starts first in the stack, so it is the key authority.
+#    mounted at /etc/munge and shared with slurmd and yggdrasil; slurmdbd
+#    starts before this container and normally creates the key; every
+#    entrypoint creates it only if absent, so the order does not matter.
 #    Ownership/permissions are normalized on every start (the volume is
 #    seeded from the image, whose package-generated key may carry a
 #    stale build-time owner).

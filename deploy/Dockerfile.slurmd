@@ -57,7 +57,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash openjdk-21-jre-headless git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && case "${TARGETARCH:-amd64}" in aarch64) arch=aarch64 ;; *) arch=x86_64 ;; esac \
+    && case "${TARGETARCH:-amd64}" in arm64|aarch64) arch=aarch64 ;; *) arch=x86_64 ;; esac \
     && curl -fsSL -o /tmp/docker.tgz \
         "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz" \
     && tar xzf /tmp/docker.tgz -C /tmp \

@@ -20,7 +20,7 @@ execution → event/ops artifacts.
                     │        │ (stub config → statusdb)                                    │
                     │  ┌────────────────────────────────────────────────────────────────┐  │
                     │  │ yggdrasil daemon (yggdrasil --dev daemon)                      │  │
-                    │  │ depends_on: statusdb healthy                                   │  │
+                    │  │ depends_on: statusdb, dind, slurmctld, slurmd (healthy)        │  │
                     │  │ entrypoint: wait CouchDB → wait seeded DBs → create ygg DBs    │  │
                     │  │            → inject test scenario → start daemon               │  │
                     │  └────────────────────────────────────────────────────────────────┘  │
@@ -30,7 +30,7 @@ execution → event/ops artifacts.
 ## Repository layout
 
 ```
-├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + genomics-status + slurmctld + slurmd; profile full adds biomate)
+├── docker-compose.yml           # the stack (core: statusdb + yggdrasil + dind + genomics-status + slurmdbd-db + slurmdbd + slurmctld + slurmd; profile full adds biomate)
 ├── deploy/
 │   ├── Dockerfile.yggdrasil     # Yggdrasil daemon image (no Dockerfile in the submodule)
 │   ├── yggdrasil-entrypoint.sh  # readiness gate + DB bootstrap + scenario injection
@@ -50,7 +50,7 @@ execution → event/ops artifacts.
 │   └── genomics-status/             # stub settings/credentials for genomics-status
 ├── Makefile                     # submodule management + compose-* targets
 ├── pyproject.toml / pixi.lock   # pixi workspace aggregating submodule deps
-├── extract_deps.py / get_deps.sh
+├── extract_deps.py
 ├── BioMate/                     # submodule
 ├── demux_realm/                 # submodule (Yggdrasil realm dmx_realm, installed in the Yggdrasil image)
 ├── genomics-status/             # submodule
@@ -115,6 +115,7 @@ it, so it is no longer a yggdrasil dependency.)
 
 ```bash
 make compose-ps          # all services "healthy", yggdrasil "Up"
+                         # (the one-shot slurmdbd-bootstrap has exited with 0)
 make compose-logs        # follow the daemon
 ```
 
@@ -132,7 +133,7 @@ And from the host:
 
 ```bash
 # the executed plan document
-curl -s -u "$STACK_COUCH_USER:$STACK_COUCH_PASSWORD" \
+curl -s -u "${STACK_COUCH_USER:-admin}:${STACK_COUCH_PASSWORD:-secret}" \
   "http://localhost:5984/yggdrasil_plans/_all_docs?include_docs=true"
 
 # step artifacts and the event spool
@@ -244,15 +245,16 @@ the same `_id`s, so it is a no-op unless the docs have been removed:
 make compose-seed-status   # PUTs both seed docs; idempotent (skips if present)
 ```
 
-The seeded run triggers the demux workflow once. Any new revision of either
-document re-triggers it, which the recipes below exploit:
+Once a flowcell carries the `transferred_to_hpc` event (see below), any new
+revision of either document re-triggers the workflow, which the recipes below
+exploit:
 
 ```bash
 make compose-trigger                        # re-touch both docs (repeatable)
 make compose-trigger DBS=flowcell_status    # or just one of them
 make compose-inject                         # +1 random flowcell (fresh ids)
 make compose-inject COUNT=3 LANES=4         # 3 flowcells, 4 lanes each
-make compose-inject DIR=BioMate/temp        # docs built from that run folder's
+make compose-inject DIR=/path/to/runfolder  # docs built from that run folder's
                                             # SampleSheet.csv (upserted by flowcell_id)
 make compose-sync-flowcell                       # add transferred_to_hpc to trigger demux
 make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6  # specify which flowcell to finalize
@@ -261,10 +263,12 @@ make compose-sync-flowcell FLOWCELL_ID=B98QWERTY6  # specify which flowcell to f
 `compose-inject` generates the documents on the fly from the *live* docs in
 the database (fetched as templates by `deploy/seed/generate_flowcell.py`):
 random mode derives new flowcell/runfolder ids, remaps projects/samples and
-rebases all timestamps to now; `DIR=` mode takes a real run folder (or a
+rebases all timestamps to now (`LANES=` beyond the template's lane count
+copies the template's lanes round-robin with fresh sample names); `DIR=` mode takes a real run folder (or a
 directory containing one), so the injected documents carry that run's actual
 samplesheet content instead of random data. Re-injecting the same run folder
-replaces the existing documents and re-triggers the workflow.
+replaces the existing documents and re-triggers the workflow. Injected
+flowcells get the `transferred_to_hpc` event added, so they start right away.
 
 The four seeded flowcells deliberately omit the `transferred_to_hpc` event, so
 the demux workflow does not start on a fresh stack. Use `compose-sync-flowcell`
@@ -344,20 +348,27 @@ the defaults otherwise):
 | `HOST_UID` / `HOST_GID` | `1000` | User the biomate container runs as (upstream convention). |
 | `YGG_INJECT_TEST_SCENARIO` | `true` | Inject the happy_path scenario on container start. |
 | `YGG_SCENARIO_ID` | `test_scenario:compose-demo` | Document id of the injected scenario. |
+| `DMX_EXECUTOR` | `local` | dmx_realm's Nextflow executor (`local` or `slurm`). `make compose-demux-slurm` sets it for one recreate only; set it in `.env` to make it stick. |
+
+The Makefile loads `.env` too, so the `compose-*` targets that talk to
+CouchDB use the same credentials as the stack.
 
 Where things live:
 
 - **Yggdrasil config**: `deploy/yggdrasil-config/main.json` (CouchDB endpoint,
   connections `projects_db` / `yggdrasil_db` / `yggdrasil_testdocs` /
   `demux_sample_info_db` / `flowcell_status_db`, poll
-  intervals). Baked into the image at the path Yggdrasil's `ConfigLoader`
-  expects. If you change it, rebuild: `make compose-up`.
+  intervals). Bind-mounted over the image-baked copy at the path Yggdrasil's
+  `ConfigLoader` expects. If you change it, restart the container:
+  `docker compose restart yggdrasil`.
 - **Genomics Status stubs**: `deploy/genomics-status/` (baked in the same way).
   Note the CouchDB credentials are hardcoded to the defaults there — if you
   change `STACK_COUCH_*`, update `deploy/genomics-status/settings.yaml` too.
 - **Volumes**: `couchdb-data` (CouchDB, incl. seed marker and Yggdrasil
   state), `ygg-work` (plan step artifacts), `ygg-events` (event JSON spool),
-  `ygg-logs` (daemon log files).
+  `ygg-logs` (daemon log files), `dind-data` (pipeline tool images),
+  `slurm-munge` (shared munge key), `slurm-state` and `slurmdbd-data`
+  (SLURM controller and accounting state).
 
 ## How it works (short version)
 
@@ -384,14 +395,14 @@ targets:
 
 | Target | Purpose |
 |--------|---------|
-| `make init` / `make init-<TARGET>` | Register missing submodules, sync URLs, and initialize root module(s) at parent-pinned commits; clone missing genomics-status/nvd3 |
+| `make init` / `make init-<TARGET>` | Register missing submodules and initialize root module(s) at parent-pinned commits; clone missing genomics-status/nvd3 |
 | `make deinit CONFIRM=1` / `make deinit-<TARGET> CONFIRM=1` | Remove all/one submodule checkout and local Git database |
 | `make status` / `make status-<TARGET>` | Show submodule state |
 | `make update-<TARGET>` / `make update-all` | Advance submodules without switching the parent branch |
 | `make use-dev` | Switch the parent repo to `dev` and apply its pinned submodule commits |
 | `make use-main` | Switch the parent repo to `main` (or `master`) and apply its pinned submodule commits |
 | `make sync` | Sync submodule remotes with `.gitmodules` |
-| `make reset` | Destructively clean and reset submodules to their recorded commits |
+| `make reset CONFIRM=1` | Destructively clean and reset submodules to their recorded commits |
 | `make extract-deps` | Print a `pixi add ...` one-liner from the submodules' `pyproject.toml` files |
 
 Deinitialization is destructive: it removes the submodule worktree (including
@@ -416,7 +427,7 @@ code, including the genomics-status base (conda env) image.
 | `make compose-up-full` | Same, plus biomate (profile `full`) |
 | `make compose-up-statusdb` | Build + start only statusdb |
 | `make compose-up-biomate` | Build + start only biomate (profile `full`) |
-| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its dep: statusdb) |
+| `make compose-up-yggdrasil` | Build + start yggdrasil (also starts its deps: statusdb, dind and the SLURM services) |
 | `make compose-up-genomics-status` | Build + start genomics-status (also starts statusdb) |
 | `make compose-build-gs-base` | Build only the genomics-status base image (conda env) |
 | `make compose-logs` | Follow yggdrasil logs |
@@ -430,6 +441,7 @@ code, including the genomics-status base (conda env) image.
 | `make compose-check-demux` | Compare the demux FASTQs with the expected ones in `Demultiplexing/`; `FLOWCELL_ID=<id>`, empty = all |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
+| `make compose-reset-work CONFIRM=1` | Clear the `/work` volume, then restart yggdrasil so its entrypoint restages the test data |
 
 ## Troubleshooting
 
@@ -460,7 +472,7 @@ code, including the genomics-status base (conda env) image.
   `make compose-up-full`.
 - **Submodules have uncommitted local changes** — `use-*` and `update-*` leave
   dirty submodules at their current commits and report that the requested pin
-  or update was skipped. `make reset` is the explicit destructive option: it
+  or update was skipped. `make reset CONFIRM=1` is the explicit destructive option: it
   cleans untracked files and checks out the commits recorded by the parent.
   The compose stack never writes into submodule trees, so any dirt there came
   from manual edits.
