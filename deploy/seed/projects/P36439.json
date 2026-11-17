@@ -1,0 +1,9 @@
+{
+  "_id": "P36439",
+  "project_id": "P36439",
+  "project_name": "M.Index2ToFastQ_25_12",
+  "details": {
+    "library_construction_method": "Test: Index reads to FASTQ",
+    "sequencing_setup": "108-8-8-101"
+  }
+}
