@@ -1,0 +1,9 @@
+{
+  "_id": "P37047",
+  "project_id": "P37047",
+  "project_name": "K.DualUMI_25_04",
+  "details": {
+    "library_construction_method": "Test: Dual UMI (8 nt at start of read 1 and index 2)",
+    "sequencing_setup": "151-10-8-151"
+  }
+}
