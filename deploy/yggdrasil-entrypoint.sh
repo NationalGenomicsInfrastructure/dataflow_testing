@@ -196,13 +196,14 @@ fi
 #       the nested pipeline containers;
 #     - the dind image ships the local Nextflow resource config at
 #       /etc/demux (the base image does not; nothing to do in that case).
-#     Both copies are no-clobber and re-run on every (re)start, so they
-#     finish before the daemon can plan anything.
+#     Both copies re-run on every (re)start, so they finish before the
+#     daemon can plan anything. The flowcells are no-clobber; the config is
+#     overwritten so edits to deploy/nf reach a persistent volume.
 stage_dev_data() {
     if [ -d /Illumina/NextSeq ] && [ -d /work ]; then
         log "Staging test flowcells: /Illumina/NextSeq -> /work/Illumina/NextSeq"
         mkdir -p /work/Illumina/NextSeq
-        cp -rn /Illumina/NextSeq/. /work/Illumina/NextSeq/
+        cp -r --update=none /Illumina/NextSeq/. /work/Illumina/NextSeq/
         # Pre-warm the page cache for the staged data. The first pipeline
         # after a (re)start would otherwise read all BCL files cold; under
         # that slow I/O the BCLCONVERT container exhausts Docker's default
@@ -213,7 +214,7 @@ stage_dev_data() {
         log "Pre-warming page cache for /work/Illumina/NextSeq"
         find /work/Illumina/NextSeq -type f -exec cat {} + > /dev/null || log "WARNING: page-cache pre-warm failed; continuing"
     fi
-    if [ -f /etc/demux/demultiplex_local.config ] && [ ! -e /work/demultiplex_local.config ]; then
+    if [ -f /etc/demux/demultiplex_local.config ]; then
         log "Staging Nextflow resource config to /work/demultiplex_local.config"
         cp /etc/demux/demultiplex_local.config /work/demultiplex_local.config
     fi

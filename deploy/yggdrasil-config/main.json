@@ -24,12 +24,6 @@
                 "endpoint": "couchdb",
                 "resource": {
                     "db": "projects"
-                },
-                "watch": {
-                    "poll_interval": 3,
-                    "include_docs": true,
-                    "limit": 100,
-                    "start_seq": "0"
                 }
             },
             "yggdrasil_db": {
@@ -54,7 +48,6 @@
                 },
                 "watch": {
                     "poll_interval": 3,
-                    "include_docs": true,
                     "limit": 100,
                     "start_seq": "0"
                 }
@@ -66,7 +59,6 @@
                 },
                 "watch": {
                     "poll_interval": 3,
-                    "include_docs": true,
                     "limit": 100,
                     "start_seq": "0"
                 },
@@ -87,7 +79,6 @@
                 },
                 "watch": {
                     "poll_interval": 3,
-                    "include_docs": true,
                     "limit": 100,
                     "start_seq": "0"
                 },
@@ -118,7 +109,6 @@
             }
         },
         "defaults": {
-            "start_seq": "0",
             "couchdb": {
                 "longpoll_timeout_ms": 5000
             }

@@ -2,7 +2,7 @@
 #
 # Builds on top of the image produced by the genomics-status submodule's
 # Dockerfile (the conda/pip environment). That base is built first by the
-# `compose-up-full` Makefile target:
+# `compose-build-gs-base` Makefile target (a prerequisite of the up targets):
 #
 #     docker build -t dataflow-genomics-status-base:latest ./genomics-status
 #

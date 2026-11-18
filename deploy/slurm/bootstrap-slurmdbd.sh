@@ -55,7 +55,7 @@ echo "[slurmdbd-bootstrap] slurmdbd is reachable"
 if sacctmgr show clusters 2>/dev/null | grep -qw dataflow; then
     echo "[slurmdbd-bootstrap] cluster dataflow already registered"
 else
-    sacctmgr add cluster name=dataflow
+    sacctmgr -i add cluster name=dataflow
 fi
 
 echo "[slurmdbd-bootstrap] bootstrap complete"
