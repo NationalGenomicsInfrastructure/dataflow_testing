@@ -277,8 +277,10 @@ workflow for one flowcell. The default flowcell ID is A12GGASZR5.
 
 ### Check the demux results
 
-Each test runfolder ships a `Demultiplexing/` directory with the expected
-FASTQs. Once the plan has finished, compare the pipeline's output with them:
+Each test runfolder ships the expected FASTQs. The yggdrasil image moves
+them from the runfolder's `Demultiplexing/` to `original_FASTQs/`, since the
+demux workflow writes its own output to `Demultiplexing/`. Once the plan has
+finished, compare the two:
 
 ```bash
 make compose-check-demux                         # default flowcell (A12GGASZR5)
@@ -286,12 +288,18 @@ make compose-check-demux FLOWCELL_ID=C36MNBVCX7  # one flowcell
 make compose-check-demux FLOWCELL_ID=            # all four
 ```
 
-`deploy/seed/check_demux_results.py` runs inside the yggdrasil container and
+`deploy/seed/check_demux_results.py` runs inside the yggdrasil container. It
+reads `original_FASTQs/` from the image copy (`/Illumina/NextSeq`) and
+`Demultiplexing/` from the staged runfolder (`/work/Illumina/NextSeq`), and
 matches files on sample name, lane and read (directory layout and `_S<n>`
 are ignored). Per file it compares the read count and the sorted sequences;
 headers and qualities are not compared. Index-read FASTQs (`I1`/`I2`) are
 skipped. Run one flowcell at a time: two concurrent demux plans fail on a
 shared Nextflow session lock.
+
+A `/work` volume staged by an image older than this layout still holds the
+expected FASTQs in `Demultiplexing/`; the check then reports duplicates.
+Restage it once with `make compose-reset-work CONFIRM=1`.
 
 Limitation: Undetermined FASTQs are **not** checked, so reads wrongly left
 unassigned only show up as a read-count mismatch in a sample file. Two
@@ -438,7 +446,7 @@ code, including the genomics-status base (conda env) image.
 | `make compose-inject` | Inject fresh generated flowcells; `COUNT=` (random mode), `LANES=`, `DIR=` (build docs from a run folder) |
 | `make compose-sync-flowcell` | Add `transferred_to_hpc` event to trigger the demux workflow for a seeded flowcell (default: A12GGASZR5) |
 | `make compose-sync-flowcell FLOWCELL_ID=<id>` | Specify which flowcell to finalize (e.g., B98QWERTY6, C36MNBVCX7, D74LKJHGF8) |
-| `make compose-check-demux` | Compare the demux FASTQs with the expected ones in `Demultiplexing/`; `FLOWCELL_ID=<id>`, empty = all |
+| `make compose-check-demux` | Compare the FASTQs in `Demultiplexing/` with the expected ones in `original_FASTQs/`; `FLOWCELL_ID=<id>`, empty = all |
 | `make compose-down` | Stop the stack (volumes kept) |
 | `make compose-reset` | Stop the stack and remove all volumes (fresh CouchDB/plan state) |
 | `make compose-reset-work CONFIRM=1` | Clear the `/work` volume, then restart yggdrasil so its entrypoint restages the test data |

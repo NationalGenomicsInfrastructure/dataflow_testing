@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Compare the demux pipeline's FASTQs with the expected ones.
 
-Each test runfolder ships <runfolder>/Demultiplexing/ with the FASTQs the
-BCLs were generated from. This compares them with what nf-core/demultiplex
-wrote under <results-root>/<FCID>/, file by file: same read count and same
-sorted sequence lines. Headers and qualities are ignored (same rule as
+Each test runfolder ships the FASTQs the BCLs were generated from; the
+yggdrasil image keeps them in <expected-root>/<runfolder>/original_FASTQs/.
+This compares them with the FASTQs the demux realm links into the staged
+runfolder's <runfolder-root>/<runfolder>/Demultiplexing/, file by file: same
+read count and same sorted sequence lines. Headers and qualities are ignored (same rule as
 BioMate/assets/compare_results.sh).
 
 Files are matched on (sample name, lane, read); the directory layout and
@@ -61,13 +62,12 @@ def index_fastqs(root, errors, side):
     return found, skipped
 
 
-def check_flowcell(runfolder, results_root):
+def check_flowcell(runfolder, runfolder_root):
     """Return (flowcell id, files matched, files expected, errors)."""
     fcid = runfolder.name.rsplit("_", 1)[-1]
-    expected_dir = runfolder / "Demultiplexing"
     errors = []
-    expected, _ = index_fastqs(expected_dir, errors, "expected")
-    results = results_root / fcid
+    expected, _ = index_fastqs(runfolder / "original_FASTQs", errors, "expected")
+    results = runfolder_root / runfolder.name / "Demultiplexing"
     if not results.is_dir():
         return fcid, 0, len(expected), [f"no results directory {results}"]
     actual, skipped = index_fastqs(results, errors, "actual")
@@ -105,15 +105,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("flowcells", nargs="*", help="flowcell ids (default: all)")
     ap.add_argument("--expected-root", type=Path, default=Path("/Illumina/NextSeq"))
-    ap.add_argument("--results-root", type=Path, default=Path("/work/nf-realm-results"))
+    ap.add_argument("--runfolder-root", type=Path, default=Path("/work/Illumina/NextSeq"))
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
         return self_test()
 
-    runfolders = sorted(p.parent for p in args.expected_root.glob("*/Demultiplexing"))
+    runfolders = sorted(p.parent for p in args.expected_root.glob("*/original_FASTQs"))
     if not runfolders:
-        die(f"no */Demultiplexing under {args.expected_root}")
+        die(f"no */original_FASTQs under {args.expected_root}")
     if args.flowcells:
         by_fcid = {r.name.rsplit("_", 1)[-1]: r for r in runfolders}
         for f in args.flowcells:
@@ -123,7 +123,7 @@ def main():
 
     failed = False
     for runfolder in runfolders:
-        fcid, matched, total, errors = check_flowcell(runfolder, args.results_root)
+        fcid, matched, total, errors = check_flowcell(runfolder, args.runfolder_root)
         for e in errors:
             print(f"{fcid}: FAIL {e}")
         print(f"{fcid}: {matched}/{total} files match" + ("" if not errors else " - FAILED"))

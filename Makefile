@@ -675,8 +675,9 @@ compose-sync-flowcell: ## Mark the seeded flowcell as fully synced by adding tra
 	fi
 	@echo "Watch the workflow with: make compose-logs"
 
-# Compare the FASTQs the demux workflow produced with the expected ones in
-# the runfolder's Demultiplexing/ (pristine copy in the yggdrasil image).
+# Compare the FASTQs the demux workflow linked into the staged runfolder's
+# Demultiplexing/ with the expected ones in original_FASTQs/ (pristine copy
+# in the yggdrasil image).
 # Run after the plan has finished. FLOWCELL_ID= (empty) checks all four.
 compose-check-demux: ## Compare the demux FASTQs with the expected ones (FLOWCELL_ID=, empty = all)
 	@$(COMPOSE) exec -T yggdrasil python3 - $(FLOWCELL_ID) < deploy/seed/check_demux_results.py
