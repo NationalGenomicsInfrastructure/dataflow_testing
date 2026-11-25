@@ -39,6 +39,16 @@ RUN pip install -e /app
 COPY demux_realm/ /app/demux_realm/
 RUN pip install --no-deps -e /app/demux_realm
 
+# 2c) BioMate, for the `biomate waif` CLI that aggregate_undetermined_stats
+#     runs on lanes demultiplexed with several settings. BioMate needs
+#     Python >= 3.12, so it gets its own uv-managed interpreter and venv
+#     (only the CLI is used, as a subprocess); /opt/venv stays on 3.11.
+COPY BioMate/ /app/BioMate/
+RUN pip install uv \
+    && UV_TOOL_DIR=/opt/uv-tools UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+       UV_TOOL_BIN_DIR=/usr/local/bin \
+       uv tool install --python 3.12 /app/BioMate
+
 # 3) Config, scenario seed and entrypoint. All files ConfigLoader resolves
 #    must live under yggdrasil_workspace/common/configurations/ (CONFIG_DIR).
 COPY deploy/yggdrasil-config/main.json /app/yggdrasil_workspace/common/configurations/main.json
