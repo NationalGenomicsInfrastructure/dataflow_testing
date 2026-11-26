@@ -41,17 +41,18 @@ RUN apt-get update \
 # bash: the SLURM batch scripts (#!/bin/bash) and the Nextflow launcher
 # need it (trixie-slim ships dash only).
 # Trixie base image: openjdk-17 is gone, use 21.
-ARG NEXTFLOW_VERSION=26.10.0
+# 25.10.x: nf-core/demultiplex 1.7.1 fails to publish outputs on 26.10 (nested `>>`).
+ARG NEXTFLOW_VERSION=25.10.9
 ARG DOCKER_CLI_VERSION=27.5.1
 ARG TARGETARCH
 ENV NEXTFLOW_HOME=/opt/nf_home \
     NXF_HOME=/work/nf-nxf \
     DOCKER_HOST=tcp://dind:2375 \
-    # Same value (incl. the single quotes) as the yggdrasil service's
-    # NXF_OPTS in docker-compose.yml: the launcher word-splits the value,
-    # and without the quotes the "linux/amd64" part is misread as a JVM
-    # main class and every nextflow invocation fails.
-    NXF_OPTS="-Ddocker.run.args='--platform linux/amd64'" \
+    # Same value as the yggdrasil service's NXF_OPTS in docker-compose.yml.
+    # No spaces: launchers word-split the value differently (25.10 keeps
+    # the quotes, 26.10 strips them), and a split "linux/amd64" is misread
+    # as a JVM main class, failing every nextflow invocation.
+    NXF_OPTS="-Ddocker.run.args=--platform=linux/amd64" \
     PATH=/opt/nextflow:$PATH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

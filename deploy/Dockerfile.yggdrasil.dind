@@ -11,7 +11,8 @@
 
 FROM dataflow-yggdrasil:latest
 
-ARG NEXTFLOW_VERSION=26.10.0
+# 25.10.x: nf-core/demultiplex 1.7.1 fails to publish outputs on 26.10 (nested `>>`).
+ARG NEXTFLOW_VERSION=25.10.9
 ARG DOCKER_CLI_VERSION=27.5.1
 
 ENV NEXTFLOW_HOME=/opt/nf_home \
