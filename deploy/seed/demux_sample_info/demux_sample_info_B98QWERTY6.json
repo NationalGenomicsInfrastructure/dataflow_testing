@@ -1179,7 +1179,9 @@
       "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
-        "MaskShortReads": 0
+        "MaskShortReads": 0,
+        "Index2ColumnReverseComplement": "N",
+        "RunInfoIndex2ReverseComplement": "N"
       },
       "BCLConvert_Data": [
         {
@@ -1227,7 +1229,9 @@
       "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
-        "MaskShortReads": 0
+        "MaskShortReads": 0,
+        "Index2ColumnReverseComplement": "N",
+        "RunInfoIndex2ReverseComplement": "N"
       },
       "BCLConvert_Data": [
         {
@@ -1294,7 +1298,9 @@
       "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
-        "MaskShortReads": 0
+        "MaskShortReads": 0,
+        "Index2ColumnReverseComplement": "N",
+        "RunInfoIndex2ReverseComplement": "N"
       },
       "BCLConvert_Data": [
         {
@@ -1351,7 +1357,9 @@
       "BCLConvert_Settings": {
         "CreateFastqForIndexReads": true,
         "MinimumTrimmedReadLength": 0,
-        "MaskShortReads": 0
+        "MaskShortReads": 0,
+        "Index2ColumnReverseComplement": "N",
+        "RunInfoIndex2ReverseComplement": "N"
       },
       "BCLConvert_Data": [
         {

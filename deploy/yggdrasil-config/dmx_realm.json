@@ -6,7 +6,7 @@
         "common_config": "/work/demultiplex_local.config",
         "work_base": "/work/nf-realm-work",
         "outdir_base": "/work/nf-realm-results",
-        "extra_args": ["--remove_adapter", "false", "-r", "d6b68bd19ef8660c726b8389965c3f30d9d4d4f8"],
+        "extra_args": ["--remove_adapter", "false", "-r", "1.7.1"],
         "skip_tools": ["fastp","fastqc","kraken","checkqc","falco","md5sum","samshee"]
     }
 }
